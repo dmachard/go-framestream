@@ -14,20 +14,20 @@ var ErrFrameTooLarge = errors.New("frame too large error")
 
 /* Framestream */
 type Fstrm struct {
-	buf           []byte
-	reader        *bufio.Reader
-	writer        *bufio.Writer
-	ctype         []byte
-	bidirectional bool
+	buf       []byte
+	reader    *bufio.Reader
+	writer    *bufio.Writer
+	ctype     []byte
+	handshake bool
 }
 
-func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, ctype []byte, bidirectional bool) *Fstrm {
+func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, ctype []byte, handshake bool) *Fstrm {
 	return &Fstrm{
-		buf:           make([]byte, DATA_FRAME_LENGTH_MAX),
-		reader:        reader,
-		writer:        writer,
-		ctype:         ctype,
-		bidirectional: bidirectional,
+		buf:       make([]byte, DATA_FRAME_LENGTH_MAX),
+		reader:    reader,
+		writer:    writer,
+		ctype:     ctype,
+		handshake: handshake,
 	}
 }
 
@@ -84,7 +84,7 @@ func (fs Fstrm) ProcessFrame(ch chan []byte) (err error) {
 			break
 		}
 		if frame.control == true {
-			if err := fs.ResetProtocol(frame); err != nil {
+			if err := fs.ResetReceiver(frame); err != nil {
 				break
 			}
 		}
@@ -129,9 +129,17 @@ func (fs Fstrm) SendControl(control *ControlFrame) (err error) {
 	return nil
 }
 
-func (fs Fstrm) InitProtocol() error {
+func (fs Fstrm) InitSender() error {
+	return nil
+}
+
+func (fs Fstrm) ResetSender() error {
+	return nil
+}
+
+func (fs Fstrm) InitReceiver() error {
 	// bidirectional mode
-	if fs.bidirectional {
+	if fs.handshake {
 		ctrl, err := fs.RecvControl()
 		if err != nil {
 			return err
@@ -165,7 +173,7 @@ func (fs Fstrm) InitProtocol() error {
 	return nil
 }
 
-func (fs Fstrm) ResetProtocol(frame *Frame) error {
+func (fs Fstrm) ResetReceiver(frame *Frame) error {
 	// decode stop control frame
 	ctrl := ControlFrame{data: frame.data}
 	if err := ctrl.Decode(); err != nil {
@@ -176,7 +184,7 @@ func (fs Fstrm) ResetProtocol(frame *Frame) error {
 	}
 
 	// bidirectional mode
-	if fs.bidirectional {
+	if fs.handshake {
 		// send finish control
 		ctrl_finish := &ControlFrame{ctype: CONTROL_FINISH, ctypes: [][]byte{fs.ctype}}
 		if err := fs.SendControl(ctrl_finish); err != nil {
