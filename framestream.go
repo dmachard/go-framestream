@@ -130,16 +130,62 @@ func (fs Fstrm) SendControl(control *ControlFrame) (err error) {
 }
 
 func (fs Fstrm) InitSender() error {
+	// handshake mode enabled
+	if fs.handshake {
+		// send ready control
+		ctrl_ready := &ControlFrame{ctype: CONTROL_READY, ctypes: [][]byte{fs.ctype}}
+		if err := fs.SendControl(ctrl_ready); err != nil {
+			return err
+		}
+
+		// wait accept control
+		ctrl, err := fs.RecvControl()
+		if err != nil {
+			return err
+		}
+		if ctrl.ctype != CONTROL_ACCEPT {
+			return ErrControlFrameUnexpected
+		}
+		if !ctrl.CheckContentType(fs.ctype) {
+			return ErrControlFrameContentTypeUnsupported
+		}
+	}
+
+	// send start control frame
+	ctrl_start := &ControlFrame{ctype: CONTROL_START, ctypes: [][]byte{fs.ctype}}
+	if err := fs.SendControl(ctrl_start); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (fs Fstrm) ResetSender() error {
+	// send stop control frame
+	ctrl_stop := &ControlFrame{ctype: CONTROL_STOP}
+	if err := fs.SendControl(ctrl_stop); err != nil {
+		return err
+	}
+
+	// handshake mode enabled
+	if fs.handshake {
+		// wait finish control
+		ctrl, err := fs.RecvControl()
+		if err != nil {
+			return err
+		}
+		if ctrl.ctype != CONTROL_FINISH {
+			return ErrControlFrameUnexpected
+		}
+	}
+
 	return nil
 }
 
 func (fs Fstrm) InitReceiver() error {
-	// bidirectional mode
+	// handshake?
 	if fs.handshake {
+		// wait ready control
 		ctrl, err := fs.RecvControl()
 		if err != nil {
 			return err
@@ -186,7 +232,7 @@ func (fs Fstrm) ResetReceiver(frame *Frame) error {
 	// bidirectional mode
 	if fs.handshake {
 		// send finish control
-		ctrl_finish := &ControlFrame{ctype: CONTROL_FINISH, ctypes: [][]byte{fs.ctype}}
+		ctrl_finish := &ControlFrame{ctype: CONTROL_FINISH}
 		if err := fs.SendControl(ctrl_finish); err != nil {
 			return err
 		}
