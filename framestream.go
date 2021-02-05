@@ -47,12 +47,12 @@ func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 	return err
 }
 
-func (fs Fstrm) RecvFrame() (*Frame, error) {
+func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	// flag control frame
 	cf := false
 
 	// enable read timeaout
-	if fs.readtimeout != 0 {
+	if timeout == true && fs.readtimeout != 0 {
 		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
 	}
 
@@ -87,7 +87,7 @@ func (fs Fstrm) RecvFrame() (*Frame, error) {
 	copy(frame.data, fs.buf[0:n])
 
 	// disable read timeaout
-	if fs.readtimeout != 0 {
+	if timeout == true && fs.readtimeout != 0 {
 		fs.conn.SetDeadline(time.Time{})
 	}
 
@@ -96,7 +96,7 @@ func (fs Fstrm) RecvFrame() (*Frame, error) {
 
 func (fs Fstrm) ProcessFrame(ch chan []byte) (err error) {
 	for {
-		frame, err := fs.RecvFrame()
+		frame, err := fs.RecvFrame(false)
 		if err != nil {
 			break
 		}
@@ -113,7 +113,7 @@ func (fs Fstrm) ProcessFrame(ch chan []byte) (err error) {
 
 func (fs Fstrm) RecvControl() (*ControlFrame, error) {
 	// waiting incoming frame
-	frame, err := fs.RecvFrame()
+	frame, err := fs.RecvFrame(true)
 	if err != nil {
 		return nil, err
 	}
