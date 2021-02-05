@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
+	"time"
 )
 
 const DATA_FRAME_LENGTH_MAX = 4096
@@ -14,27 +16,31 @@ var ErrFrameTooLarge = errors.New("frame too large error")
 
 /* Framestream */
 type Fstrm struct {
-	buf       []byte
-	reader    *bufio.Reader
-	writer    *bufio.Writer
-	ctype     []byte
-	handshake bool
+	buf         []byte
+	reader      *bufio.Reader
+	writer      *bufio.Writer
+	conn        net.Conn
+	readtimeout time.Duration
+	ctype       []byte
+	handshake   bool
 }
 
-func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, ctype []byte, handshake bool) *Fstrm {
+func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, conn net.Conn, readtimeout time.Duration, ctype []byte, handshake bool) *Fstrm {
 	return &Fstrm{
-		buf:       make([]byte, DATA_FRAME_LENGTH_MAX),
-		reader:    reader,
-		writer:    writer,
-		ctype:     ctype,
-		handshake: handshake,
+		buf:         make([]byte, DATA_FRAME_LENGTH_MAX),
+		reader:      reader,
+		writer:      writer,
+		ctype:       ctype,
+		conn:        conn,
+		readtimeout: readtimeout,
+		handshake:   handshake,
 	}
 }
 
 func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 	r := bytes.NewReader(frame.data)
 
-	if _, err := r.WriteTo(fs.writer); err == nil {
+	if _, err = r.WriteTo(fs.writer); err == nil {
 		err = fs.writer.Flush()
 	}
 
@@ -44,6 +50,11 @@ func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 func (fs Fstrm) RecvFrame() (*Frame, error) {
 	// flag control frame
 	cf := false
+
+	// enable read timeaout
+	if fs.readtimeout != 0 {
+		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
+	}
 
 	// read frame len (4 bytes)
 	var n uint32
@@ -74,6 +85,12 @@ func (fs Fstrm) RecvFrame() (*Frame, error) {
 		control: cf,
 	}
 	copy(frame.data, fs.buf[0:n])
+
+	// disable read timeaout
+	if fs.readtimeout != 0 {
+		fs.conn.SetDeadline(time.Time{})
+	}
+
 	return frame, nil
 }
 
