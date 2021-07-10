@@ -1,3 +1,3 @@
 module github.com/dmachard/go-framestream
 
-go 1.15
+go 1.16

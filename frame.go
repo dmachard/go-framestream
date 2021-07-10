@@ -34,7 +34,7 @@ func (frame *Frame) Write(payload []byte) error {
 	var flen uint32
 
 	// if it is a control frame then the frame length must be equal to zero
-	if frame.control == true {
+	if frame.control {
 		flen = uint32(0)
 	} else {
 		flen = uint32(len(payload))

@@ -52,7 +52,7 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	cf := false
 
 	// enable read timeaout
-	if timeout == true && fs.readtimeout != 0 {
+	if timeout && fs.readtimeout != 0 {
 		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
 	}
 
@@ -68,26 +68,33 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	}
 
 	// it is a control frame, read the next 4 bytes to get control length
+	i := 0
 	if n == 0 {
 		cf = true
 		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
 			return nil, err
 		}
+		var buf bytes.Buffer
+		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
+			return nil, err
+		}
+		fs.buf = append(buf.Bytes(), fs.buf...)
+		i = 4
 	}
 
 	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[0:n]); err != nil {
+	if _, err := io.ReadFull(fs.reader, fs.buf[i:uint32(i)+n]); err != nil {
 		return nil, err
 	}
 
 	frame := &Frame{
-		data:    make([]byte, n),
+		data:    make([]byte, uint32(i)+n),
 		control: cf,
 	}
-	copy(frame.data, fs.buf[0:n])
+	copy(frame.data, fs.buf[0:uint32(i)+n])
 
 	// disable read timeaout
-	if timeout == true && fs.readtimeout != 0 {
+	if timeout && fs.readtimeout != 0 {
 		fs.conn.SetDeadline(time.Time{})
 	}
 
@@ -100,7 +107,7 @@ func (fs Fstrm) ProcessFrame(ch chan []byte) (err error) {
 		if err != nil {
 			break
 		}
-		if frame.control == true {
+		if frame.control {
 			if err := fs.ResetReceiver(frame); err != nil {
 				break
 			}
@@ -119,7 +126,7 @@ func (fs Fstrm) RecvControl() (*ControlFrame, error) {
 	}
 
 	// checking if we have a control frame
-	if frame.control == false {
+	if !frame.control {
 		return nil, ErrControlFrameExpected
 	}
 

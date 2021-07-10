@@ -14,8 +14,12 @@ const CONTROL_FINISH = 0x05
 
 const CONTROL_FIELD_CONTENT_TYPE = 0x01
 
+const CONTROL_FRAME_LENGTH_MAX = 4064
+
+var ErrControlFrameTooLarge = errors.New("control frame too large error")
 var ErrControlFrameMalformed = errors.New("control frame malformed")
 var ErrControlFrameExpected = errors.New("control frame expected")
+var ErrControlFrameUnsupported = errors.New("control frame unsupported")
 var ErrControlFrameUnexpected = errors.New("control frame unexpected")
 var ErrControlFrameContentTypeUnsupported = errors.New("control frame with unsupported content type")
 
@@ -34,17 +38,27 @@ var ErrControlFrameContentTypeUnsupported = errors.New("control frame with unsup
 */
 type ControlFrame struct {
 	data   []byte
+	cflen  uint32
 	ctype  uint32
 	ctypes [][]byte
 }
 
 func (ctrl *ControlFrame) Decode() error {
+	// decoding control frame length
+	ctrl.cflen = binary.BigEndian.Uint32(ctrl.data[:4])
+	if ctrl.cflen > CONTROL_FRAME_LENGTH_MAX {
+		return ErrControlFrameTooLarge
+	}
+
 	// decoding content type
-	ctrl.ctype = binary.BigEndian.Uint32(ctrl.data[:4])
+	ctrl.ctype = binary.BigEndian.Uint32(ctrl.data[4:8])
+	if ctrl.ctype > CONTROL_FINISH {
+		return ErrControlFrameUnsupported
+	}
 
 	// decoding optional fields
-	if len(ctrl.data[4:]) > 0 {
-		cfields := ctrl.data[4:]
+	if len(ctrl.data[8:]) > 0 {
+		cfields := ctrl.data[8:]
 		for len(cfields) > 8 {
 			cf_ctype := binary.BigEndian.Uint32(cfields[:4])
 			if cf_ctype != CONTROL_FIELD_CONTENT_TYPE {
@@ -71,6 +85,7 @@ func (ctrl *ControlFrame) Encode() error {
 	for _, ctype := range ctrl.ctypes {
 		cflen += len(ctype)
 	}
+	ctrl.cflen = uint32(cflen)
 
 	// add the control frame length
 	if err := binary.Write(&buf, binary.BigEndian, uint32(cflen)); err != nil {
@@ -106,7 +121,7 @@ func (ctrl *ControlFrame) Encode() error {
 
 func (ctrl *ControlFrame) CheckContentType(ctype []byte) bool {
 	for _, cf_ctype := range ctrl.ctypes {
-		if bytes.Compare(ctype, cf_ctype) == 0 {
+		if bytes.Equal(ctype, cf_ctype) {
 			return true
 		}
 	}
