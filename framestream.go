@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const DATA_FRAME_LENGTH_MAX = 4096
+const DATA_FRAME_LENGTH_MAX = 65536
 
 var ErrFrameTooLarge = errors.New("frame too large error")
 
@@ -101,20 +101,21 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	return frame, nil
 }
 
-func (fs Fstrm) ProcessFrame(ch chan []byte) (err error) {
+func (fs Fstrm) ProcessFrame(ch chan []byte) error {
+	var err error
+	var frame *Frame
 	for {
-		frame, err := fs.RecvFrame(false)
+		frame, err = fs.RecvFrame(false)
 		if err != nil {
 			break
 		}
 		if frame.control {
-			if err := fs.ResetReceiver(frame); err != nil {
+			if err = fs.ResetReceiver(frame); err != nil {
 				break
 			}
 		}
 		ch <- frame.data
 	}
-	//close(ch)
 	return err
 }
 
