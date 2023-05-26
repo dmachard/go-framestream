@@ -13,6 +13,7 @@ import (
 const DATA_FRAME_LENGTH_MAX = 65536
 
 var ErrFrameTooLarge = errors.New("frame too large error")
+var ErrReaderNotReady = errors.New("reader not ready")
 
 /* Framestream */
 type Fstrm struct {
@@ -58,6 +59,9 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 
 	// read frame len (4 bytes)
 	var n uint32
+	if fs.reader == nil {
+		return nil, ErrReaderNotReady
+	}
 	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
 		return nil, err
 	}
