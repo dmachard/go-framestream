@@ -68,7 +68,7 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 
 	// checking data to read according to the size of the buffer
 	if n > uint32(len(fs.buf)) {
-		fs.reader.Reset(nil)
+		fs.reader.Reset(bufio.NewReader(fs.conn))
 		return nil, ErrFrameTooLarge
 	}
 
