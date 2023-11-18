@@ -5,7 +5,8 @@ import (
 	"encoding/binary"
 )
 
-/* Frame struct
+/*
+	Frame struct
 
 |------------------------------------|----------------------|
 | Data length                        | 4 bytes              |
@@ -23,6 +24,10 @@ type Frame struct {
 
 func (frame Frame) Len() int {
 	return len(frame.data)
+}
+
+func (frame Frame) IsControl() bool {
+	return frame.control
 }
 
 func (frame Frame) Data() []byte {
