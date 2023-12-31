@@ -58,3 +58,8 @@ func (frame *Frame) Write(payload []byte) error {
 	frame.data = buf.Bytes()
 	return nil
 }
+
+func (frame *Frame) AppendData(payload []byte) error {
+	frame.data = append(frame.data, payload...)
+	return nil
+}
