@@ -1,6 +1,8 @@
 package framestream
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestFrameWrite(t *testing.T) {
 	frame := &Frame{}
