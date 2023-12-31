@@ -1,6 +1,6 @@
 # go-framestream
 
-Frame Streams implementation in Go 
+Frame Streams implementation in Go with compression support (gzip, lz4, snappy and zstd).
 
 ## Installation
 
@@ -41,6 +41,20 @@ if err := fs_client.InitReceiver(); err != nil {
 
 // receive frame, timeout 5s
 _, err := fs_client.RecvFrame(true)
+if err != nil {
+    t.Errorf("error to receive frame: %s", err)
+}
+```
+
+## Usage example with compression
+
+```go
+if err := fs_server.SendCompressedFrame(&compress.GzipCodec, frame); err != nil {
+    t.Errorf("error to send frame: %s", err)
+}
+...
+// receive frame, timeout 5s
+frame, err := fs_client.RecvCompressedFrame(&compress.GzipCodec, true)
 if err != nil {
     t.Errorf("error to receive frame: %s", err)
 }
