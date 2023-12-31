@@ -63,3 +63,14 @@ func (frame *Frame) AppendData(payload []byte) error {
 	frame.data = append(frame.data, payload...)
 	return nil
 }
+
+func (frame *Frame) Encode() error {
+	var buf bytes.Buffer
+	length := len(frame.data)
+	if err := binary.Write(&buf, binary.BigEndian, uint32(length)); err != nil {
+		return err
+	}
+
+	frame.data = append(buf.Bytes(), frame.data...)
+	return nil
+}
