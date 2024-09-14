@@ -2,7 +2,7 @@
 
 # go-framestream
 
-Frame Streams implementation in Go with compression support (gzip, lz4, snappy and zstd).
+Frame Streams implementation in Go with **compression support** (gzip, lz4, snappy and zstd).
 
 ## Installation
 
