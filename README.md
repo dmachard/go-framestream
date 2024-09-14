@@ -1,3 +1,5 @@
+<img src="https://img.shields.io/badge/go%20version-min%201.21-green" alt="Go version"/>
+
 # go-framestream
 
 Frame Streams implementation in Go with compression support (gzip, lz4, snappy and zstd).
