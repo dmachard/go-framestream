@@ -83,7 +83,7 @@ ok      github.com/dmachard/go-framestream
 ```
 
 
-### DNStap format
+### Frame format
 
 Data Frame
 
