@@ -4,12 +4,76 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"io"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/segmentio/kafka-go/compress"
 )
+
+// Mock connection pour tests
+type mockConn struct {
+	io.Reader
+	io.Writer
+}
+
+func (m *mockConn) Close() error                       { return nil }
+func (m *mockConn) LocalAddr() net.Addr                { return nil }
+func (m *mockConn) RemoteAddr() net.Addr               { return nil }
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func BenchmarkSendFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), nil, 0, nil, false)
+	frame := &Frame{data: make([]byte, 1024)} // Frame de 1 KB
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.SendFrame(frame)
+	}
+}
+
+func BenchmarkRecvFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	conn := &mockConn{Reader: buf, Writer: buf}
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), conn, 0, nil, false)
+
+	testFrame := &Frame{data: make([]byte, 1024)}
+	fs.SendFrame(testFrame)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.RecvFrame(false)
+	}
+}
+
+func BenchmarkSendCompressedFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), nil, 0, nil, false)
+	frame := &Frame{data: make([]byte, 1024)} // Frame de 1 KB
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.SendCompressedFrame(&compress.SnappyCodec, frame)
+	}
+}
+
+func BenchmarkRecvCompressedFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	conn := &mockConn{Reader: buf, Writer: buf}
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), conn, 0, nil, false)
+
+	testFrame := &Frame{data: make([]byte, 1024)}
+	fs.SendCompressedFrame(&compress.SnappyCodec, testFrame)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.RecvCompressedFrame(&compress.SnappyCodec, false)
+	}
+}
 
 func TestFramestream_Handshake(t *testing.T) {
 	client, server := net.Pipe()
