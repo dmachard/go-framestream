@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -20,7 +21,9 @@ var ErrReaderNotReady = errors.New("reader not ready")
 
 var bufferCompressedPool = sync.Pool{
 	New: func() interface{} {
-		return new(bytes.Buffer)
+		buf := new(bytes.Buffer)
+		buf.Grow(DATA_FRAME_LENGTH_MAX)
+		return buf
 	},
 }
 
@@ -94,7 +97,8 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
 			return nil, err
 		}
-		fs.buf = append(buf.Bytes(), fs.buf...)
+		copy(fs.buf[4:], fs.buf[:len(fs.buf)-4])
+		copy(fs.buf[:4], buf.Bytes())
 		i = 4
 	}
 
@@ -119,27 +123,28 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 
 func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err error) {
 	compressBuf := bufferCompressedPool.Get().(*bytes.Buffer)
-	defer bufferCompressedPool.Put(compressBuf)
 	compressBuf.Reset()
+	defer func() {
+		compressBuf.Truncate(0)
+		bufferCompressedPool.Put(compressBuf)
+	}()
 
 	compressor := codec.NewWriter(compressBuf)
 	defer compressor.Close()
-	defer compressBuf.Reset()
 
 	_, err = compressor.Write(frame.data)
 	if err != nil {
-		return err
+		return fmt.Errorf("compression failed: %w", err)
 	}
 	if err = compressor.Close(); err != nil {
-		compressBuf.Reset()
-		return err
+		return fmt.Errorf("failed to close compressor: %w", err)
 	}
 
 	compressFrame := &Frame{}
 	compressFrame.Write(compressBuf.Bytes())
 
-	if err = fs.SendFrame(compressFrame); err == nil {
-		return err
+	if err = fs.SendFrame(compressFrame); err != nil {
+		return fmt.Errorf("failed to send compressed frame: %w", err)
 	}
 	return nil
 }
@@ -155,8 +160,9 @@ func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame,
 
 	decompressedData, err := io.ReadAll(compressReader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decompress frame: %w", err)
 	}
+
 	return &Frame{data: decompressedData}, nil
 }
 
