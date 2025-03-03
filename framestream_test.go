@@ -4,12 +4,92 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"io"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/segmentio/kafka-go/compress"
 )
+
+// Mock connection pour tests
+type mockConn struct {
+	io.Reader
+	io.Writer
+}
+
+func (m *mockConn) Close() error                       { return nil }
+func (m *mockConn) LocalAddr() net.Addr                { return nil }
+func (m *mockConn) RemoteAddr() net.Addr               { return nil }
+func (m *mockConn) SetDeadline(t time.Time) error      { return nil }
+func (m *mockConn) SetReadDeadline(t time.Time) error  { return nil }
+func (m *mockConn) SetWriteDeadline(t time.Time) error { return nil }
+
+func BenchmarkSendFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), nil, 0, nil, false)
+	frame := &Frame{data: make([]byte, 1024)} // Frame de 1 KB
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.SendFrame(frame)
+	}
+}
+
+func createTestFrame(data []byte) []byte {
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.BigEndian, uint32(len(data)))
+	buf.Write(data)
+	return buf.Bytes()
+}
+
+func BenchmarkRecvFrame(b *testing.B) {
+	testData := make([]byte, 3200)
+	for i := 0; i < len(testData); i++ {
+		testData[i] = byte(i)
+	}
+	testFrame := createTestFrame(testData)
+
+	reader := bufio.NewReader(bytes.NewReader(testFrame))
+	fs := NewFstrm(reader, nil, nil, 5*time.Second, []byte("test"), false)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		reader.Reset(bytes.NewReader(testFrame))
+		frame, err := fs.RecvFrame(false)
+		if err != nil {
+			b.Fatalf("RecvFrame error: %v", err)
+		}
+		if len(frame.data) != 3200 {
+			b.Fatalf("Frame size unexpected: got %d, want %d", len(frame.data), 32)
+		}
+	}
+}
+
+func BenchmarkSendCompressedFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), nil, 0, nil, false)
+	frame := &Frame{data: make([]byte, 1024)} // Frame de 1 KB
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.SendCompressedFrame(&compress.SnappyCodec, frame)
+	}
+}
+
+func BenchmarkRecvCompressedFrame(b *testing.B) {
+	buf := new(bytes.Buffer)
+	conn := &mockConn{Reader: buf, Writer: buf}
+	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), conn, 0, nil, false)
+
+	testFrame := &Frame{data: make([]byte, 1024)}
+	fs.SendCompressedFrame(&compress.SnappyCodec, testFrame)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fs.RecvCompressedFrame(&compress.SnappyCodec, false)
+	}
+}
 
 func TestFramestream_Handshake(t *testing.T) {
 	client, server := net.Pipe()
