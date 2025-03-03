@@ -36,17 +36,33 @@ func BenchmarkSendFrame(b *testing.B) {
 	}
 }
 
-func BenchmarkRecvFrame(b *testing.B) {
+func createTestFrame(data []byte) []byte {
 	buf := new(bytes.Buffer)
-	conn := &mockConn{Reader: buf, Writer: buf}
-	fs := NewFstrm(bufio.NewReader(buf), bufio.NewWriter(buf), conn, 0, nil, false)
+	binary.Write(buf, binary.BigEndian, uint32(len(data)))
+	buf.Write(data)
+	return buf.Bytes()
+}
 
-	testFrame := &Frame{data: make([]byte, 1024)}
-	fs.SendFrame(testFrame)
+func BenchmarkRecvFrame(b *testing.B) {
+	testData := make([]byte, 3200)
+	for i := 0; i < len(testData); i++ {
+		testData[i] = byte(i)
+	}
+	testFrame := createTestFrame(testData)
+
+	reader := bufio.NewReader(bytes.NewReader(testFrame))
+	fs := NewFstrm(reader, nil, nil, 5*time.Second, []byte("test"), false)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		fs.RecvFrame(false)
+		reader.Reset(bytes.NewReader(testFrame))
+		frame, err := fs.RecvFrame(false)
+		if err != nil {
+			b.Fatalf("RecvFrame error: %v", err)
+		}
+		if len(frame.data) != 3200 {
+			b.Fatalf("Frame size unexpected: got %d, want %d", len(frame.data), 32)
+		}
 	}
 }
 

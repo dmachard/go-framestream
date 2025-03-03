@@ -27,6 +27,13 @@ var bufferCompressedPool = sync.Pool{
 	},
 }
 
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, DATA_FRAME_LENGTH_MAX)
+		return &buf
+	},
+}
+
 /* Framestream */
 type Fstrm struct {
 	buf         []byte
@@ -63,59 +70,55 @@ func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 }
 
 func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
-	// flag control frame
-	cf := false
-
 	// enable read timeaout
 	if timeout && fs.readtimeout != 0 {
 		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
+		defer fs.conn.SetDeadline(time.Time{})
 	}
 
-	// read frame len (4 bytes)
-	var n uint32
 	if fs.reader == nil {
 		return nil, ErrReaderNotReady
 	}
-	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+
+	// read frame len (4 bytes)
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
 		return nil, err
 	}
+	n := binary.BigEndian.Uint32(lenBuf[:])
 
 	// checking data to read according to the size of the buffer
-	if n > uint32(len(fs.buf)) {
+	if n > DATA_FRAME_LENGTH_MAX {
 		fs.reader.Reset(bufio.NewReader(fs.conn))
 		return nil, ErrFrameTooLarge
 	}
 
+	bufPtr := bufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer bufferPool.Put(bufPtr)
+
+	control := false
+	offset := 0
+
 	// it is a control frame, read the next 4 bytes to get control length
-	i := 0
 	if n == 0 {
-		cf = true
-		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+		control = true
+		if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
 			return nil, err
 		}
-		var buf bytes.Buffer
-		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
-			return nil, err
-		}
-		copy(fs.buf[4:], fs.buf[:len(fs.buf)-4])
-		copy(fs.buf[:4], buf.Bytes())
-		i = 4
+		n = binary.BigEndian.Uint32(lenBuf[:])
+		binary.BigEndian.PutUint32(buf[:4], n)
+		offset = 4
 	}
 
 	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[i:uint32(i)+n]); err != nil {
+	if _, err := io.ReadFull(fs.reader, buf[offset:offset+int(n)]); err != nil {
 		return nil, err
 	}
 
 	frame := &Frame{
-		data:    make([]byte, uint32(i)+n),
-		control: cf,
-	}
-	copy(frame.data, fs.buf[0:uint32(i)+n])
-
-	// disable read timeaout
-	if timeout && fs.readtimeout != 0 {
-		defer fs.conn.SetDeadline(time.Time{})
+		data:    buf[:offset+int(n)],
+		control: control,
 	}
 
 	return frame, nil
