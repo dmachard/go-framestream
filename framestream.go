@@ -5,10 +5,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go/compress"
@@ -18,21 +16,6 @@ const DATA_FRAME_LENGTH_MAX = 65536
 
 var ErrFrameTooLarge = errors.New("frame too large error")
 var ErrReaderNotReady = errors.New("reader not ready")
-
-var bufferCompressedPool = sync.Pool{
-	New: func() interface{} {
-		buf := new(bytes.Buffer)
-		buf.Grow(DATA_FRAME_LENGTH_MAX)
-		return buf
-	},
-}
-
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, DATA_FRAME_LENGTH_MAX)
-		return &buf
-	},
-}
 
 /* Framestream */
 type Fstrm struct {
@@ -70,104 +53,162 @@ func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 }
 
 func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
+	// flag control frame
+	cf := false
+
 	// enable read timeaout
 	if timeout && fs.readtimeout != 0 {
 		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
-		defer fs.conn.SetDeadline(time.Time{})
-	}
-
-	if fs.reader == nil {
-		return nil, ErrReaderNotReady
 	}
 
 	// read frame len (4 bytes)
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
+	var n uint32
+	if fs.reader == nil {
+		return nil, ErrReaderNotReady
+	}
+	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
 		return nil, err
 	}
-	n := binary.BigEndian.Uint32(lenBuf[:])
 
 	// checking data to read according to the size of the buffer
-	if n > DATA_FRAME_LENGTH_MAX {
+	if n > uint32(len(fs.buf)) {
 		fs.reader.Reset(bufio.NewReader(fs.conn))
 		return nil, ErrFrameTooLarge
 	}
 
-	bufPtr := bufferPool.Get().(*[]byte)
-	buf := *bufPtr
-	defer bufferPool.Put(bufPtr)
-
-	control := false
-	offset := 0
-
 	// it is a control frame, read the next 4 bytes to get control length
+	i := 0
 	if n == 0 {
-		control = true
-		if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
+		cf = true
+		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
 			return nil, err
 		}
-		n = binary.BigEndian.Uint32(lenBuf[:])
-		binary.BigEndian.PutUint32(buf[:4], n)
-		offset = 4
+		var buf bytes.Buffer
+		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
+			return nil, err
+		}
+		fs.buf = append(buf.Bytes(), fs.buf...)
+		i = 4
 	}
 
 	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, buf[offset:offset+int(n)]); err != nil {
+	if _, err := io.ReadFull(fs.reader, fs.buf[i:uint32(i)+n]); err != nil {
 		return nil, err
 	}
 
 	frame := &Frame{
-		data:    buf[:offset+int(n)],
-		control: control,
+		data:    make([]byte, uint32(i)+n),
+		control: cf,
+	}
+	copy(frame.data, fs.buf[0:uint32(i)+n])
+
+	// disable read timeaout
+	if timeout && fs.readtimeout != 0 {
+		fs.conn.SetDeadline(time.Time{})
 	}
 
 	return frame, nil
 }
 
 func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err error) {
-	compressBuf := bufferCompressedPool.Get().(*bytes.Buffer)
-	compressBuf.Reset()
-	defer func() {
-		compressBuf.Truncate(0)
-		bufferCompressedPool.Put(compressBuf)
-	}()
 
+	compressBuf := new(bytes.Buffer)
 	compressor := codec.NewWriter(compressBuf)
 	defer compressor.Close()
+	defer compressBuf.Reset()
 
 	_, err = compressor.Write(frame.data)
 	if err != nil {
-		return fmt.Errorf("compression failed: %w", err)
+		return err
 	}
 	if err = compressor.Close(); err != nil {
-		return fmt.Errorf("failed to close compressor: %w", err)
+		compressBuf.Reset()
+		return err
 	}
 
 	compressFrame := &Frame{}
 	compressFrame.Write(compressBuf.Bytes())
 
-	if err = fs.SendFrame(compressFrame); err != nil {
-		return fmt.Errorf("failed to send compressed frame: %w", err)
+	if err = fs.SendFrame(compressFrame); err == nil {
+		return err
 	}
 	return nil
 }
 
 func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame, error) {
-	frame, err := fs.RecvFrame(timeout)
+	// flag control frame
+	cf := false
+
+	// enable read timeaout
+	if timeout && fs.readtimeout != 0 {
+		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
+	}
+
+	// read frame len (4 bytes)
+	var n uint32
+	if fs.reader == nil {
+		return nil, ErrReaderNotReady
+	}
+	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+
+	// checking data to read according to the size of the buffer
+	if n > uint32(len(fs.buf)) {
+		fs.reader.Reset(bufio.NewReader(fs.conn))
+		return nil, ErrFrameTooLarge
+	}
+
+	// it is a control frame, read the next 4 bytes to get control length
+	i := 0
+	if n == 0 {
+		cf = true
+		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+			return nil, err
+		}
+		var buf bytes.Buffer
+		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
+			return nil, err
+		}
+		fs.buf = append(buf.Bytes(), fs.buf...)
+		i = 4
+	}
+
+	// read  binary data and push it in the buffer
+	if _, err := io.ReadFull(fs.reader, fs.buf[i:uint32(i)+n]); err != nil {
+		return nil, err
+	}
+
+	compressReader := codec.NewReader(bytes.NewReader(fs.buf[0 : uint32(i)+n]))
+	defer compressReader.Close()
+
+	var decompressedBuffer bytes.Buffer
+
+	_, err := io.Copy(&decompressedBuffer, compressReader)
 	if err != nil {
 		return nil, err
 	}
 
-	compressReader := codec.NewReader(bytes.NewReader(frame.data))
-	defer compressReader.Close()
+	uncompressedFrame := &Frame{
+		data:    make([]byte, decompressedBuffer.Len()),
+		control: cf,
+	}
+	copy(uncompressedFrame.data, decompressedBuffer.Bytes())
 
-	decompressedData, err := io.ReadAll(compressReader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decompress frame: %w", err)
+	// disable read timeaout
+	if timeout && fs.readtimeout != 0 {
+		fs.conn.SetDeadline(time.Time{})
 	}
 
-	return &Frame{data: decompressedData}, nil
+	return uncompressedFrame, nil
 }
+
+// func (fs Fstrm) ProcessCompressedFrame(chanData chan Frame, chanCtrl Frame, chanErr error) error {
+// 	compressFrame, err := fs.RecvFrame(true)
+// 	if err != nil {
+// 		return err
+// 	}
+// }
 
 func (fs Fstrm) ProcessFrame(ch chan []byte) error {
 	var err error
