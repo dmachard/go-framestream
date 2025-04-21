@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -145,9 +146,7 @@ func TestFramestream_SliceBoundsPanic_Issue974(t *testing.T) {
 	fsClient := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 2*time.Second, []byte("dummy"), handshake)
 
 	_, err := fsClient.RecvFrame(true)
-	if err == nil {
-		t.Errorf("expected error due to oversized frame, but got none")
-	} else {
-		t.Logf("RecvFrame returned expected error: %v", err)
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("unexpected error: got %v, want ErrFrameTooLarge", err)
 	}
 }
