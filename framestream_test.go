@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -117,5 +118,35 @@ func TestFramestream_CompressedData(t *testing.T) {
 	data := frame.Data()[4 : 4+n]
 	if !bytes.Equal(data, frameData) {
 		t.Errorf("frame data not equal")
+	}
+}
+
+func TestFramestream_SliceBoundsPanic_Issue974(t *testing.T) {
+	client, server := net.Pipe()
+	handshake := false // handshake not required for this test
+
+	// Simulate a server that sends an oversized control frame
+	go func() {
+		defer server.Close()
+
+		var payloadLen uint32 = 227195
+
+		// Build a control frame:
+		// - First 4 bytes: zero => indicates a control frame
+		// - Next 4 bytes: actual length of the control payload
+		var buf bytes.Buffer
+		binary.Write(&buf, binary.BigEndian, uint32(0))  // control frame indicator
+		binary.Write(&buf, binary.BigEndian, payloadLen) // control payload length
+		buf.Write(make([]byte, payloadLen))              // dummy payload (zeros)
+
+		server.Write(buf.Bytes()) // send it to the client
+	}()
+
+	// Framestream client that will read the malformed frame
+	fsClient := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 2*time.Second, []byte("dummy"), handshake)
+
+	_, err := fsClient.RecvFrame(true)
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("unexpected error: got %v, want ErrFrameTooLarge", err)
 	}
 }

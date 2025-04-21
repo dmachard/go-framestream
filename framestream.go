@@ -54,7 +54,7 @@ func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 
 func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	// flag control frame
-	cf := false
+	isControl := false
 
 	// enable read timeaout
 	if timeout && fs.readtimeout != 0 {
@@ -79,28 +79,46 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	// it is a control frame, read the next 4 bytes to get control length
 	i := 0
 	if n == 0 {
-		cf = true
+		isControl = true
 		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
 			return nil, err
 		}
-		var buf bytes.Buffer
-		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
+		// prepend control frame length into buffer
+		var ctrlBuf bytes.Buffer
+		if err := binary.Write(&ctrlBuf, binary.BigEndian, uint32(n)); err != nil {
 			return nil, err
 		}
-		fs.buf = append(buf.Bytes(), fs.buf...)
+
+		// manually prepend control frame length
+		tmp := make([]byte, 4+len(fs.buf))
+		copy(tmp[:4], ctrlBuf.Bytes())
+		copy(tmp[4:], fs.buf)
+		fs.buf = tmp
+
 		i = 4
 	}
 
+	// total frame size needed
+	total := int(i) + int(n)
+
+	// bounds check
+	if total > cap(fs.buf) {
+		return nil, ErrFrameTooLarge
+	}
+
+	// adjust slice size before writing
+	fs.buf = fs.buf[:total]
+
 	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[i:uint32(i)+n]); err != nil {
+	if _, err := io.ReadFull(fs.reader, fs.buf[i:total]); err != nil {
 		return nil, err
 	}
 
 	frame := &Frame{
-		data:    make([]byte, uint32(i)+n),
-		control: cf,
+		data:    make([]byte, total),
+		control: isControl,
 	}
-	copy(frame.data, fs.buf[0:uint32(i)+n])
+	copy(frame.data, fs.buf[:total])
 
 	// disable read timeaout
 	if timeout && fs.readtimeout != 0 {
@@ -202,13 +220,6 @@ func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame,
 
 	return uncompressedFrame, nil
 }
-
-// func (fs Fstrm) ProcessCompressedFrame(chanData chan Frame, chanCtrl Frame, chanErr error) error {
-// 	compressFrame, err := fs.RecvFrame(true)
-// 	if err != nil {
-// 		return err
-// 	}
-// }
 
 func (fs Fstrm) ProcessFrame(ch chan []byte) error {
 	var err error
