@@ -1,4 +1,4 @@
-<img src="https://img.shields.io/badge/go%20version-min%201.16-green" alt="Go version"/>
+<img src="https://img.shields.io/badge/go%20version-min%201.18-green" alt="Go version"/>
 
 # go-framestream
 
