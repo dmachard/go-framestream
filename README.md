@@ -89,12 +89,12 @@ goos: linux
 goarch: amd64
 pkg: github.com/dmachard/go-framestream
 cpu: Intel(R) Core(TM) i5-7200U CPU @ 2.50GHz
-BenchmarkControlDecode-4                19755384                59.40 ns/op           24 B/op          1 allocs/op
-BenchmarkControlEncode-4                 4363948               232.9 ns/op           128 B/op          6 allocs/op
-BenchmarkFrameWrite-4                    3096256               424.3 ns/op           244 B/op          9 allocs/op
-BenchmarkRecvFrame_RawDataFrame-4         635953              1944 ns/op             508 B/op         29 allocs/op
+BenchmarkControlDecode-4                19577821                62.44 ns/op           24 B/op          1 allocs/op
+BenchmarkControlEncode-4                 3777750               272.5 ns/op           128 B/op          6 allocs/op
+BenchmarkFrameWrite-4                    2691032               409.6 ns/op           244 B/op          9 allocs/op
+BenchmarkRecvFrame_RawDataFrame-4         398997              2932 ns/op            3196 B/op         43 allocs/op
 PASS
-ok      github.com/dmachard/go-framestream      10.135s
+ok      github.com/dmachard/go-framestream      7.331s
 ```
 
 ### Frame format

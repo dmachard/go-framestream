@@ -89,11 +89,11 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	}
 
 	// read frame len (4 bytes)
-	var lenBuf [4]byte
-	if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
+	var header [4]byte
+	if _, err := io.ReadFull(fs.reader, header[:]); err != nil {
 		return nil, err
 	}
-	frameLen := binary.BigEndian.Uint32(lenBuf[:])
+	frameLen := binary.BigEndian.Uint32(header[:])
 
 	// frame control ?
 	isControl := frameLen == 0
@@ -101,10 +101,10 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 
 	// it is a control frame, read the next 4 bytes to get control length
 	if isControl {
-		if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
+		if _, err := io.ReadFull(fs.reader, header[:]); err != nil {
 			return nil, err
 		}
-		frameLen = binary.BigEndian.Uint32(lenBuf[:])
+		frameLen = binary.BigEndian.Uint32(header[:])
 		offset = 4
 	}
 
@@ -129,10 +129,11 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 		return nil, err
 	}
 
-	return &Frame{
-		data:    fs.buf[:total],
+	frame := &Frame{
+		data:    append([]byte(nil), fs.buf[:total]...),
 		control: isControl,
-	}, nil
+	}
+	return frame, nil
 }
 
 func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
