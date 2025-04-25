@@ -52,145 +52,6 @@ func (fs Fstrm) SendFrame(frame *Frame) (err error) {
 	return err
 }
 
-func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
-	// flag control frame
-	isControl := false
-
-	// enable read timeaout
-	if timeout && fs.readtimeout != 0 {
-		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
-	}
-
-	if fs.reader == nil {
-		return nil, ErrReaderNotReady
-	}
-
-	// read frame len (4 bytes)
-	var n uint32
-	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
-		return nil, err
-	}
-
-	// it is a control frame, read the next 4 bytes to get control length
-	i := 0
-	if n == 0 {
-		isControl = true
-		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
-			return nil, err
-		}
-		i = 4
-	}
-
-	// total frame size needed
-	total := int(i) + int(n)
-
-	// bounds check
-	if total > cap(fs.buf) {
-		return nil, ErrFrameTooLarge
-	}
-
-	// Resize buffer slice only, underlying array remains the same
-	fs.buf = fs.buf[:total]
-
-	// If control frame, manually write length prefix in first 4 bytes
-	if isControl {
-		binary.BigEndian.PutUint32(fs.buf[:4], n)
-	}
-
-	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[i:total]); err != nil {
-		return nil, err
-	}
-
-	frame := &Frame{
-		data:    fs.buf[:total],
-		control: isControl,
-	}
-
-	// disable read timeaout
-	if timeout && fs.readtimeout != 0 {
-		_ = fs.conn.SetDeadline(time.Time{})
-	}
-
-	return frame, nil
-}
-
-func (fs Fstrm) RecvFrameV0(timeout bool) (*Frame, error) {
-	// flag control frame
-	isControl := false
-
-	// enable read timeaout
-	if timeout && fs.readtimeout != 0 {
-		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
-	}
-
-	// read frame len (4 bytes)
-	var n uint32
-	if fs.reader == nil {
-		return nil, ErrReaderNotReady
-	}
-	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
-		return nil, err
-	}
-
-	// checking data to read according to the size of the buffer
-	if n > uint32(len(fs.buf)) {
-		fs.reader.Reset(bufio.NewReader(fs.conn))
-		return nil, ErrFrameTooLarge
-	}
-
-	// it is a control frame, read the next 4 bytes to get control length
-	i := 0
-	if n == 0 {
-		isControl = true
-		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
-			return nil, err
-		}
-		// prepend control frame length into buffer
-		var ctrlBuf bytes.Buffer
-		if err := binary.Write(&ctrlBuf, binary.BigEndian, uint32(n)); err != nil {
-			return nil, err
-		}
-
-		// manually prepend control frame length
-		tmp := make([]byte, 4+len(fs.buf))
-		copy(tmp[:4], ctrlBuf.Bytes())
-		copy(tmp[4:], fs.buf)
-		fs.buf = tmp
-
-		i = 4
-	}
-
-	// total frame size needed
-	total := int(i) + int(n)
-
-	// bounds check
-	if total > cap(fs.buf) {
-		return nil, ErrFrameTooLarge
-	}
-
-	// adjust slice size before writing
-	fs.buf = fs.buf[:total]
-
-	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[i:total]); err != nil {
-		return nil, err
-	}
-
-	frame := &Frame{
-		data:    fs.buf[:total],
-		control: isControl,
-	}
-	copy(frame.data, fs.buf[:total])
-
-	// disable read timeaout
-	if timeout && fs.readtimeout != 0 {
-		fs.conn.SetDeadline(time.Time{})
-	}
-
-	return frame, nil
-}
-
 func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err error) {
 
 	compressBuf := new(bytes.Buffer)
@@ -216,70 +77,89 @@ func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err err
 	return nil
 }
 
-func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame, error) {
-	// flag control frame
-	cf := false
-
-	// enable read timeaout
+func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
+	// Enable read timeout
 	if timeout && fs.readtimeout != 0 {
 		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
+		defer fs.conn.SetDeadline(time.Time{})
 	}
 
-	// read frame len (4 bytes)
-	var n uint32
 	if fs.reader == nil {
 		return nil, ErrReaderNotReady
 	}
-	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+
+	// read frame len (4 bytes)
+	var lenBuf [4]byte
+	if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
 		return nil, err
 	}
+	frameLen := binary.BigEndian.Uint32(lenBuf[:])
 
-	// checking data to read according to the size of the buffer
-	if n > uint32(len(fs.buf)) {
-		fs.reader.Reset(bufio.NewReader(fs.conn))
+	// frame control ?
+	isControl := frameLen == 0
+	offset := 0
+
+	// it is a control frame, read the next 4 bytes to get control length
+	if isControl {
+		if _, err := io.ReadFull(fs.reader, lenBuf[:]); err != nil {
+			return nil, err
+		}
+		frameLen = binary.BigEndian.Uint32(lenBuf[:])
+		offset = 4
+	}
+
+	// total frame size needed
+	total := offset + int(frameLen)
+
+	// bounds check
+	if total > cap(fs.buf) {
 		return nil, ErrFrameTooLarge
 	}
 
-	// it is a control frame, read the next 4 bytes to get control length
-	i := 0
-	if n == 0 {
-		cf = true
-		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
-			return nil, err
-		}
-		var buf bytes.Buffer
-		if err := binary.Write(&buf, binary.BigEndian, uint32(n)); err != nil {
-			return nil, err
-		}
-		fs.buf = append(buf.Bytes(), fs.buf...)
-		i = 4
+	// Resize buffer slice only, underlying array remains the same
+	fs.buf = fs.buf[:total]
+
+	// If control frame, manually write length prefix in first 4 bytes
+	if isControl {
+		binary.BigEndian.PutUint32(fs.buf[:4], frameLen)
 	}
 
-	// read  binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[i:uint32(i)+n]); err != nil {
+	// read binary data and push it in the buffer
+	if _, err := io.ReadFull(fs.reader, fs.buf[offset:total]); err != nil {
 		return nil, err
 	}
 
-	compressReader := codec.NewReader(bytes.NewReader(fs.buf[0 : uint32(i)+n]))
+	return &Frame{
+		data:    fs.buf[:total],
+		control: isControl,
+	}, nil
+}
+
+func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
+	return fs.readFrame(timeout)
+}
+
+func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame, error) {
+	frame, err := fs.readFrame(timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	compressReader := codec.NewReader(bytes.NewReader(frame.data))
 	defer compressReader.Close()
 
 	var decompressedBuffer bytes.Buffer
 
-	_, err := io.Copy(&decompressedBuffer, compressReader)
+	_, err = io.Copy(&decompressedBuffer, compressReader)
 	if err != nil {
 		return nil, err
 	}
 
 	uncompressedFrame := &Frame{
 		data:    make([]byte, decompressedBuffer.Len()),
-		control: cf,
+		control: frame.control,
 	}
 	copy(uncompressedFrame.data, decompressedBuffer.Bytes())
-
-	// disable read timeaout
-	if timeout && fs.readtimeout != 0 {
-		fs.conn.SetDeadline(time.Time{})
-	}
 
 	return uncompressedFrame, nil
 }
