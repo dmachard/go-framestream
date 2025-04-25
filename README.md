@@ -2,7 +2,7 @@
 
 # go-framestream
 
-Frame Streams implementation in Go with **compression support** (gzip, lz4, snappy and zstd).
+Frame Streams implementation in Go with channed-base support and **compression** (gzip, lz4, snappy and zstd).
 
 ## Installation
 
@@ -82,6 +82,20 @@ PASS
 ok      github.com/dmachard/go-framestream
 ```
 
+
+```bash
+$ go test -bench=. -benchmem
+goos: linux
+goarch: amd64
+pkg: github.com/dmachard/go-framestream
+cpu: Intel(R) Core(TM) i5-7200U CPU @ 2.50GHz
+BenchmarkControlDecode-4                19577821                62.44 ns/op           24 B/op          1 allocs/op
+BenchmarkControlEncode-4                 3777750               272.5 ns/op           128 B/op          6 allocs/op
+BenchmarkFrameWrite-4                    2691032               409.6 ns/op           244 B/op          9 allocs/op
+BenchmarkRecvFrame_RawDataFrame-4          75945             16599 ns/op           72983 B/op         48 allocs/op
+PASS
+ok      github.com/dmachard/go-framestream      7.331s
+```
 
 ### Frame format
 
