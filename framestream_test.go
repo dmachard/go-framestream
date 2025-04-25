@@ -303,6 +303,24 @@ d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d0
 	}
 }
 
+type resettableReader struct {
+	raw *bytes.Reader
+	buf *bufio.Reader
+}
+
+func newResettableReader(data []byte) *resettableReader {
+	r := bytes.NewReader(data)
+	return &resettableReader{
+		raw: r,
+		buf: bufio.NewReader(r),
+	}
+}
+
+func (r *resettableReader) Reset(data []byte) {
+	r.raw.Reset(data)
+	r.buf.Reset(r.raw)
+}
+
 func BenchmarkRecvFrame_RawDataFrame(b *testing.B) {
 	// raw data extracted from pcap file (data frame only in this payload)
 	hexInput := `
@@ -362,9 +380,18 @@ d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d0
 		b.Fatalf("invalid hex input: %v", err)
 	}
 
+	// prepare fs ONCE
+	reader := newResettableReader(data)
+	fs := NewFstrm(
+		reader.buf,
+		nil, nil, 0, []byte("ctype"), false,
+	)
+
+	// skip N-1 tours pour aligner
+	b.ResetTimer()
+
 	for i := 0; i < b.N; i++ {
-		reader := bufio.NewReader(bytes.NewReader(data))
-		fs := NewFstrm(reader, nil, nil, 0, []byte("ctype"), false)
+		reader.Reset(data)
 
 		var frameCount int
 		for {

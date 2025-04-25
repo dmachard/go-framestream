@@ -61,6 +61,69 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
 	}
 
+	if fs.reader == nil {
+		return nil, ErrReaderNotReady
+	}
+
+	// read frame len (4 bytes)
+	var n uint32
+	if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+
+	// it is a control frame, read the next 4 bytes to get control length
+	i := 0
+	if n == 0 {
+		isControl = true
+		if err := binary.Read(fs.reader, binary.BigEndian, &n); err != nil {
+			return nil, err
+		}
+		i = 4
+	}
+
+	// total frame size needed
+	total := int(i) + int(n)
+
+	// bounds check
+	if total > cap(fs.buf) {
+		return nil, ErrFrameTooLarge
+	}
+
+	// Resize buffer slice only, underlying array remains the same
+	fs.buf = fs.buf[:total]
+
+	// If control frame, manually write length prefix in first 4 bytes
+	if isControl {
+		binary.BigEndian.PutUint32(fs.buf[:4], n)
+	}
+
+	// read  binary data and push it in the buffer
+	if _, err := io.ReadFull(fs.reader, fs.buf[i:total]); err != nil {
+		return nil, err
+	}
+
+	frame := &Frame{
+		data:    fs.buf[:total],
+		control: isControl,
+	}
+
+	// disable read timeaout
+	if timeout && fs.readtimeout != 0 {
+		_ = fs.conn.SetDeadline(time.Time{})
+	}
+
+	return frame, nil
+}
+
+func (fs Fstrm) RecvFrameV0(timeout bool) (*Frame, error) {
+	// flag control frame
+	isControl := false
+
+	// enable read timeaout
+	if timeout && fs.readtimeout != 0 {
+		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
+	}
+
 	// read frame len (4 bytes)
 	var n uint32
 	if fs.reader == nil {
@@ -115,7 +178,7 @@ func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	}
 
 	frame := &Frame{
-		data:    make([]byte, total),
+		data:    fs.buf[:total],
 		control: isControl,
 	}
 	copy(frame.data, fs.buf[:total])
