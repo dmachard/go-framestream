@@ -31,37 +31,59 @@ func TestFramestream_Handshake(t *testing.T) {
 	}
 }
 
-func TestFramestream_Data(t *testing.T) {
+func TestRecvFrame_DataFrame(t *testing.T) {
 	client, server := net.Pipe()
-	handshake := true
+	defer client.Close()
+	defer server.Close()
 
-	// init framestream sender
 	go func() {
-		fs_server := NewFstrm(bufio.NewReader(server), bufio.NewWriter(server), server, 5*time.Second, []byte("frstrm"), handshake)
-		if err := fs_server.InitSender(); err != nil {
-			t.Errorf("error to init framestream sender: %s", err)
-		}
-
-		// send frame
-		frame := &Frame{}
-		if err := frame.Write([]byte{1, 2, 3, 4}); err != nil {
-			t.Errorf("error to init frame: %s", err)
-		}
-		if err := fs_server.SendFrame(frame); err != nil {
-			t.Errorf("error to send frame: %s", err)
-		}
+		defer server.Close()
+		// Frame data = [1,2,3,4]
+		data := []byte{1, 2, 3, 4}
+		var buf bytes.Buffer
+		binary.Write(&buf, binary.BigEndian, uint32(len(data)))
+		buf.Write(data)
+		server.Write(buf.Bytes())
 	}()
 
-	// init framestream receiver
-	fs_client := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 5*time.Second, []byte("frstrm"), handshake)
-	if err := fs_client.InitReceiver(); err != nil {
-		t.Errorf("error to init framestream receiver: %s", err)
-	}
+	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 2*time.Second, []byte("ctype"), false)
 
-	// receive frame, timeout 5s
-	_, err := fs_client.RecvFrame(true)
+	frame, err := fs.RecvFrame(true)
 	if err != nil {
-		t.Errorf("error to receive frame: %s", err)
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if frame.control {
+		t.Fatalf("expected data frame, got control frame")
+	}
+	if !bytes.Equal(frame.Data(), []byte{1, 2, 3, 4}) {
+		t.Fatalf("unexpected data: got %v", frame.Data())
+	}
+}
+
+func TestRecvFrame_ReaderNotReady(t *testing.T) {
+	fs := NewFstrm(nil, nil, nil, 0, []byte("ctype"), false)
+
+	_, err := fs.RecvFrame(false)
+	if !errors.Is(err, ErrReaderNotReady) {
+		t.Fatalf("expected ErrReaderNotReady, got: %v", err)
+	}
+}
+
+func TestRecvFrame_FrameTooLarge(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		defer server.Close()
+		binary.Write(server, binary.BigEndian, uint32(DATA_FRAME_LENGTH_MAX+1))
+	}()
+
+	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 1*time.Second, []byte("ctype"), false)
+
+	_, err := fs.RecvFrame(true)
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("expected ErrFrameTooLarge, got: %v", err)
 	}
 }
 
