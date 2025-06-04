@@ -23,7 +23,8 @@ var ErrControlFrameUnsupported = errors.New("control frame unsupported")
 var ErrControlFrameUnexpected = errors.New("control frame unexpected")
 var ErrControlFrameContentTypeUnsupported = errors.New("control frame with unsupported content type")
 
-/* Control Frame struct
+/*
+Control Frame struct
 |------------------------------------|----------------------|
 | Control frame length               | 4 bytes              |
 |------------------------------------|----------------------|
@@ -44,6 +45,11 @@ type ControlFrame struct {
 }
 
 func (ctrl *ControlFrame) Decode() error {
+	// checking if data is enough
+	if len(ctrl.data) < 8 {
+		return ErrControlFrameMalformed
+	}
+
 	// decoding control frame length
 	ctrl.cflen = binary.BigEndian.Uint32(ctrl.data[:4])
 	if ctrl.cflen > CONTROL_FRAME_LENGTH_MAX {
@@ -65,6 +71,10 @@ func (ctrl *ControlFrame) Decode() error {
 				return ErrControlFrameMalformed
 			}
 			cf_clen := binary.BigEndian.Uint32(cfields[4:8])
+			if len(cfields) < int(cf_clen+8) {
+				return ErrControlFrameMalformed
+			}
+
 			ctrl.ctypes = append(ctrl.ctypes, cfields[8:cf_clen+8])
 			cfields = cfields[cf_clen+8:]
 		}
