@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go/compress"
@@ -77,6 +78,13 @@ func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err err
 	return nil
 }
 
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, DATA_FRAME_LENGTH_MAX)
+		return &b
+	},
+}
+
 func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	// Enable read timeout
 	if timeout && fs.readtimeout != 0 {
@@ -116,21 +124,25 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 		return nil, ErrFrameTooLarge
 	}
 
-	// Resize buffer slice only, underlying array remains the same
-	fs.buf = fs.buf[:total]
+	bufPtr := bufferPool.Get().(*[]byte)
+	buf := *bufPtr
+	defer bufferPool.Put(bufPtr)
 
 	// If control frame, manually write length prefix in first 4 bytes
 	if isControl {
-		binary.BigEndian.PutUint32(fs.buf[:4], frameLen)
+		binary.BigEndian.PutUint32(buf[:4], frameLen)
 	}
 
-	// read binary data and push it in the buffer
-	if _, err := io.ReadFull(fs.reader, fs.buf[offset:total]); err != nil {
+	if _, err := io.ReadFull(fs.reader, buf[offset:total]); err != nil {
 		return nil, err
 	}
 
+	// Systematic copy to guarantee memory independence
+	dataCopy := make([]byte, total)
+	copy(dataCopy, buf[:total])
+
 	frame := &Frame{
-		data:    append([]byte(nil), fs.buf[:total]...),
+		data:    dataCopy,
 		control: isControl,
 	}
 	return frame, nil
