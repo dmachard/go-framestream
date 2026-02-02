@@ -25,6 +25,9 @@ jobs:
     - name: Test
       run: go test -cover -v
 
+    - name: Fuzzing
+      run: go test -fuzz=FuzzRecvFrame -fuzztime=10s
+
     - name: Bench
       run: go test -bench . -benchmem
 
