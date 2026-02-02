@@ -66,7 +66,6 @@ func TestFrameDataIsIndependentCopy(t *testing.T) {
 	buf.Write([]byte{0, 0, 0, 4, 0xAA, 0xBB, 0xCC, 0xDD})
 
 	fs := &Fstrm{
-		buf:    make([]byte, DATA_FRAME_LENGTH_MAX),
 		reader: bufio.NewReader(buf),
 	}
 

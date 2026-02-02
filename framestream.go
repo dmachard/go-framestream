@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go/compress"
@@ -20,7 +19,6 @@ var ErrReaderNotReady = errors.New("reader not ready")
 
 /* Framestream */
 type Fstrm struct {
-	buf         []byte
 	reader      *bufio.Reader
 	writer      *bufio.Writer
 	conn        net.Conn
@@ -31,7 +29,6 @@ type Fstrm struct {
 
 func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, conn net.Conn, readtimeout time.Duration, ctype []byte, handshake bool) *Fstrm {
 	fs := &Fstrm{
-		buf:         make([]byte, DATA_FRAME_LENGTH_MAX),
 		reader:      reader,
 		writer:      writer,
 		ctype:       ctype,
@@ -78,13 +75,6 @@ func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err err
 	return nil
 }
 
-var bufferPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, DATA_FRAME_LENGTH_MAX)
-		return &b
-	},
-}
-
 func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	// Enable read timeout
 	if timeout && fs.readtimeout != 0 {
@@ -120,29 +110,26 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	total := offset + int(frameLen)
 
 	// bounds check
-	if total > cap(fs.buf) {
+	if total > DATA_FRAME_LENGTH_MAX {
 		return nil, ErrFrameTooLarge
 	}
 
-	bufPtr := bufferPool.Get().(*[]byte)
-	buf := *bufPtr
-	defer bufferPool.Put(bufPtr)
+	// allocate exact size needed
+	// avoiding pool and copy overhead
+	data := make([]byte, total)
 
 	// If control frame, manually write length prefix in first 4 bytes
 	if isControl {
-		binary.BigEndian.PutUint32(buf[:4], frameLen)
+		binary.BigEndian.PutUint32(data[:4], frameLen)
 	}
 
-	if _, err := io.ReadFull(fs.reader, buf[offset:total]); err != nil {
+	// read payload directly into data buffer
+	if _, err := io.ReadFull(fs.reader, data[offset:total]); err != nil {
 		return nil, err
 	}
 
-	// Systematic copy to guarantee memory independence
-	dataCopy := make([]byte, total)
-	copy(dataCopy, buf[:total])
-
 	frame := &Frame{
-		data:    dataCopy,
+		data:    data,
 		control: isControl,
 	}
 	return frame, nil
