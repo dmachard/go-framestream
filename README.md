@@ -88,13 +88,13 @@ $ go test -bench=. -benchmem
 goos: linux
 goarch: amd64
 pkg: github.com/dmachard/go-framestream
-cpu: Intel(R) Core(TM) i5-7200U CPU @ 2.50GHz
-BenchmarkControlDecode-4                19577821                62.44 ns/op           24 B/op          1 allocs/op
-BenchmarkControlEncode-4                 3777750               272.5 ns/op           128 B/op          6 allocs/op
-BenchmarkFrameWrite-4                    2691032               409.6 ns/op           244 B/op          9 allocs/op
-BenchmarkRecvFrame_RawDataFrame-4         398997              2932 ns/op            3196 B/op         43 allocs/op
+cpu: Intel(R) Core(TM) Ultra 9 185H
+BenchmarkControlDecode-22               40167390                25.56 ns/op           24 B/op       1 allocs/op
+BenchmarkControlEncode-22               44397898                25.58 ns/op          48 B/op          1 allocs/op
+BenchmarkFrameWrite-22                  22031930                46.46 ns/op          96 B/op          2 allocs/op
+BenchmarkRecvFrame_RawDataFrame-22        897949              1303 ns/op           3196 B/op         43 allocs/op
 PASS
-ok      github.com/dmachard/go-framestream      7.331s
+ok      github.com/dmachard/go-framestream      5.482s
 ```
 
 ### Frame format

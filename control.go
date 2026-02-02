@@ -88,8 +88,6 @@ func (ctrl *ControlFrame) Decode() error {
 }
 
 func (ctrl *ControlFrame) Encode() error {
-	var buf bytes.Buffer
-
 	// compute the control frame length
 	cflen := 4 + len(ctrl.ctypes)*8
 	for _, ctype := range ctrl.ctypes {
@@ -97,35 +95,33 @@ func (ctrl *ControlFrame) Encode() error {
 	}
 	ctrl.cflen = uint32(cflen)
 
+	// allocate exact buffer: 4 bytes for length + length of content
+	ctrl.data = make([]byte, 4+int(cflen))
+
 	// add the control frame length
-	if err := binary.Write(&buf, binary.BigEndian, uint32(cflen)); err != nil {
-		return err
-	}
+	binary.BigEndian.PutUint32(ctrl.data[:4], ctrl.cflen)
 
 	// add the control type
-	if err := binary.Write(&buf, binary.BigEndian, uint32(ctrl.ctype)); err != nil {
-		return err
-	}
+	binary.BigEndian.PutUint32(ctrl.data[4:8], ctrl.ctype)
+
+	// offset for optional fields
+	offset := 8
 
 	// add optional fields
 	for _, ctype := range ctrl.ctypes {
-		// content type
-		if err := binary.Write(&buf, binary.BigEndian, uint32(CONTROL_FIELD_CONTENT_TYPE)); err != nil {
-			return err
-		}
+		// content type (4 bytes)
+		binary.BigEndian.PutUint32(ctrl.data[offset:offset+4], uint32(CONTROL_FIELD_CONTENT_TYPE))
+		offset += 4
 
-		// content type length
-		if err := binary.Write(&buf, binary.BigEndian, uint32(len(ctype))); err != nil {
-			return err
-		}
+		// content type length (4 bytes)
+		binary.BigEndian.PutUint32(ctrl.data[offset:offset+4], uint32(len(ctype)))
+		offset += 4
 
 		// content type payload
-		if _, err := buf.Write(ctype); err != nil {
-			return err
-		}
+		copy(ctrl.data[offset:], ctype)
+		offset += len(ctype)
 	}
 
-	ctrl.data = buf.Bytes()
 	return nil
 }
 

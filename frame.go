@@ -35,7 +35,6 @@ func (frame Frame) Data() []byte {
 }
 
 func (frame *Frame) Write(payload []byte) error {
-	var buf bytes.Buffer
 	var flen uint32
 
 	// if it is a control frame then the frame length must be equal to zero
@@ -45,17 +44,15 @@ func (frame *Frame) Write(payload []byte) error {
 		flen = uint32(len(payload))
 	}
 
+	// allocate exactly the size needed: 4 bytes for header + payload length
+	frame.data = make([]byte, 4+len(payload))
+
 	// add frame length
-	if err := binary.Write(&buf, binary.BigEndian, flen); err != nil {
-		return err
-	}
+	binary.BigEndian.PutUint32(frame.data[:4], flen)
 
 	// append payload in the buffer
-	if _, err := buf.Write(payload); err != nil {
-		return err
-	}
+	copy(frame.data[4:], payload)
 
-	frame.data = buf.Bytes()
 	return nil
 }
 
