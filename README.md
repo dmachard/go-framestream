@@ -62,6 +62,25 @@ if err != nil {
 }
 ```
 
+
+## Frame size limits
+
+By default, the library enforces the following limits:
+- Control frames: 4064 bytes
+- Data frames: 65536 bytes
+
+You can increase these limits to support vendors sending larger frames (like Infoblox):
+
+```go
+fs := NewFstrm(...)
+
+// Increase control frame limit to 16KB
+fs.SetControlFrameMaxLength(16384)
+
+// Increase data frame limit to 1MB
+fs.SetDataFrameMaxLength(1048576)
+```
+
 ## Testing
 
 ```bash
