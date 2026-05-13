@@ -12,32 +12,44 @@ import (
 	"github.com/segmentio/kafka-go/compress"
 )
 
-const DATA_FRAME_LENGTH_MAX = 65536
+const DefaultDataFrameMaxLength = 65536
 
 var ErrFrameTooLarge = errors.New("frame too large error")
 var ErrReaderNotReady = errors.New("reader not ready")
 
 /* Framestream */
 type Fstrm struct {
-	reader      *bufio.Reader
-	writer      *bufio.Writer
-	conn        net.Conn
-	readtimeout time.Duration
-	ctype       []byte
-	handshake   bool
+	reader                *bufio.Reader
+	writer                *bufio.Writer
+	conn                  net.Conn
+	readtimeout           time.Duration
+	ctype                 []byte
+	handshake             bool
+	dataFrameMaxLength    uint32
+	controlFrameMaxLength uint32
 }
 
 func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, conn net.Conn, readtimeout time.Duration, ctype []byte, handshake bool) *Fstrm {
 	fs := &Fstrm{
-		reader:      reader,
-		writer:      writer,
-		ctype:       ctype,
-		conn:        conn,
-		readtimeout: readtimeout,
-		handshake:   handshake,
+		reader:                reader,
+		writer:                writer,
+		ctype:                 ctype,
+		conn:                  conn,
+		readtimeout:           readtimeout,
+		handshake:             handshake,
+		dataFrameMaxLength:    DefaultDataFrameMaxLength,
+		controlFrameMaxLength: DefaultControlFrameMaxLength,
 	}
 
 	return fs
+}
+
+func (fs *Fstrm) SetDataFrameMaxLength(length uint32) {
+	fs.dataFrameMaxLength = length
+}
+
+func (fs *Fstrm) SetControlFrameMaxLength(length uint32) {
+	fs.controlFrameMaxLength = length
 }
 
 func (fs Fstrm) SendFrame(frame *Frame) (err error) {
@@ -110,7 +122,11 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	total := offset + int(frameLen)
 
 	// bounds check
-	if total > DATA_FRAME_LENGTH_MAX {
+	maxLength := fs.dataFrameMaxLength
+	if maxLength == 0 {
+		maxLength = DefaultDataFrameMaxLength
+	}
+	if total > int(maxLength) {
 		return nil, ErrFrameTooLarge
 	}
 
@@ -195,7 +211,7 @@ func (fs Fstrm) RecvControl() (*ControlFrame, error) {
 	}
 
 	// decode-it
-	ctrl_frame := &ControlFrame{data: frame.data}
+	ctrl_frame := &ControlFrame{data: frame.data, maxLength: fs.controlFrameMaxLength}
 	if err := ctrl_frame.Decode(); err != nil {
 		return nil, err
 	}

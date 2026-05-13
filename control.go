@@ -14,7 +14,7 @@ const CONTROL_FINISH = 0x05
 
 const CONTROL_FIELD_CONTENT_TYPE = 0x01
 
-const CONTROL_FRAME_LENGTH_MAX = 4064
+const DefaultControlFrameMaxLength = 4064
 
 var ErrControlFrameTooLarge = errors.New("control frame too large error")
 var ErrControlFrameMalformed = errors.New("control frame malformed")
@@ -38,10 +38,11 @@ Control Frame struct
 |------------------------------------|----------------------|
 */
 type ControlFrame struct {
-	data   []byte
-	cflen  uint32
-	ctype  uint32
-	ctypes [][]byte
+	data      []byte
+	cflen     uint32
+	ctype     uint32
+	ctypes    [][]byte
+	maxLength uint32
 }
 
 func (ctrl *ControlFrame) Decode() error {
@@ -52,7 +53,11 @@ func (ctrl *ControlFrame) Decode() error {
 
 	// decoding control frame length
 	ctrl.cflen = binary.BigEndian.Uint32(ctrl.data[:4])
-	if ctrl.cflen > CONTROL_FRAME_LENGTH_MAX {
+	maxLength := ctrl.maxLength
+	if maxLength == 0 {
+		maxLength = DefaultControlFrameMaxLength
+	}
+	if ctrl.cflen > maxLength {
 		return ErrControlFrameTooLarge
 	}
 

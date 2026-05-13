@@ -114,7 +114,7 @@ func TestRecvFrame_FrameTooLarge(t *testing.T) {
 
 	go func() {
 		defer server.Close()
-		binary.Write(server, binary.BigEndian, uint32(DATA_FRAME_LENGTH_MAX+1))
+		binary.Write(server, binary.BigEndian, uint32(DefaultDataFrameMaxLength+1))
 	}()
 
 	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 1*time.Second, []byte("ctype"), false)
@@ -412,5 +412,84 @@ d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d0
 		if frameCount != expected {
 			b.Fatalf("expected %d frames, got %d", expected, frameCount)
 		}
+	}
+}
+
+func TestRecvFrame_ConfigurableLimits(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	// 1. Test Data Frame Limit
+	largeDataLen := uint32(DefaultDataFrameMaxLength + 1000)
+	go func() {
+		defer server.Close()
+		var buf bytes.Buffer
+		binary.Write(&buf, binary.BigEndian, largeDataLen)
+		buf.Write(make([]byte, largeDataLen))
+		server.Write(buf.Bytes())
+	}()
+
+	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 2*time.Second, []byte("ctype"), false)
+	
+	// Should fail with default limit
+	_, err := fs.RecvFrame(true)
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Errorf("expected ErrFrameTooLarge with default limit, got: %v", err)
+	}
+
+	// 2. Test Control Frame Limit
+	client2, server2 := net.Pipe()
+	defer client2.Close()
+	defer server2.Close()
+
+	// Build a valid but large control frame
+	largeCT := make([]byte, 1000)
+	for i := range largeCT {
+		largeCT[i] = 'a'
+	}
+	ctrlLarge := &ControlFrame{
+		ctype:  CONTROL_READY,
+		ctypes: [][]byte{largeCT, largeCT, largeCT, largeCT, largeCT}, // ~5KB
+	}
+	ctrlLarge.Encode()
+	largeControlLen := ctrlLarge.cflen
+
+	go func() {
+		defer server2.Close()
+		var buf bytes.Buffer
+		binary.Write(&buf, binary.BigEndian, uint32(0))
+		binary.Write(&buf, binary.BigEndian, largeControlLen)
+		buf.Write(ctrlLarge.data[4:]) // Encode() already put the length in data[:4]
+		server2.Write(buf.Bytes())
+	}()
+
+	fs2 := NewFstrm(bufio.NewReader(client2), bufio.NewWriter(client2), client2, 2*time.Second, []byte("ctype"), false)
+	
+	// Should fail with default control limit (4064)
+	_, err = fs2.RecvControl()
+	if !errors.Is(err, ErrControlFrameTooLarge) {
+		t.Errorf("expected ErrControlFrameTooLarge with default limit, got: %v", err)
+	}
+
+	// 3. Increase limits and verify success
+	client3, server3 := net.Pipe()
+	defer client3.Close()
+	defer server3.Close()
+	go func() {
+		defer server3.Close()
+		var buf bytes.Buffer
+		binary.Write(&buf, binary.BigEndian, uint32(0))
+		binary.Write(&buf, binary.BigEndian, largeControlLen)
+		buf.Write(ctrlLarge.data[4:])
+		server3.Write(buf.Bytes())
+	}()
+
+	fs3 := NewFstrm(bufio.NewReader(client3), bufio.NewWriter(client3), client3, 2*time.Second, []byte("ctype"), false)
+	fs3.SetControlFrameMaxLength(largeControlLen + 10)
+
+	_, err = fs3.RecvControl()
+	if err != nil {
+		t.Fatalf("unexpected error with increased limit: %v", err)
 	}
 }
