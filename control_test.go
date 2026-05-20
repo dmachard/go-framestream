@@ -132,3 +132,16 @@ func BenchmarkControlEncode(b *testing.B) {
 		}
 	}
 }
+
+func TestControlDecode_EmptyOptionalField(t *testing.T) {
+	data := []byte{
+		0, 0, 0, 12, // cflen = 12
+		0, 0, 0, 1, // ctype = CONTROL_ACCEPT
+		0, 0, 0, 1, // cf_ctype = CONTROL_FIELD_CONTENT_TYPE (4 bytes)
+		0, 0, 0, 0, // cf_clen = 0 (4 bytes)
+	}
+	frame := &ControlFrame{data: data}
+	if err := frame.Decode(); err != nil {
+		t.Errorf("failed to decode control frame with empty optional field: %v", err)
+	}
+}
