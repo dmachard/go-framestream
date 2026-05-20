@@ -70,7 +70,7 @@ func (ctrl *ControlFrame) Decode() error {
 	// decoding optional fields
 	if len(ctrl.data[8:]) > 0 {
 		cfields := ctrl.data[8:]
-		for len(cfields) > 8 {
+		for len(cfields) >= 8 {
 			cf_ctype := binary.BigEndian.Uint32(cfields[:4])
 			if cf_ctype != CONTROL_FIELD_CONTENT_TYPE {
 				return ErrControlFrameMalformed

@@ -122,9 +122,17 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	total := offset + int(frameLen)
 
 	// bounds check
-	maxLength := fs.dataFrameMaxLength
-	if maxLength == 0 {
-		maxLength = DefaultDataFrameMaxLength
+	var maxLength uint32
+	if isControl {
+		maxLength = fs.controlFrameMaxLength
+		if maxLength == 0 {
+			maxLength = DefaultControlFrameMaxLength
+		}
+	} else {
+		maxLength = fs.dataFrameMaxLength
+		if maxLength == 0 {
+			maxLength = DefaultDataFrameMaxLength
+		}
 	}
 	if total > int(maxLength) {
 		return nil, ErrFrameTooLarge
@@ -325,7 +333,7 @@ func (fs Fstrm) InitReceiver() error {
 
 func (fs Fstrm) ResetReceiver(frame *Frame) error {
 	// decode stop control frame
-	ctrl := ControlFrame{data: frame.data}
+	ctrl := ControlFrame{data: frame.data, maxLength: fs.controlFrameMaxLength}
 	if err := ctrl.Decode(); err != nil {
 		return err
 	}

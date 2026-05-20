@@ -431,7 +431,7 @@ func TestRecvFrame_ConfigurableLimits(t *testing.T) {
 	}()
 
 	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 2*time.Second, []byte("ctype"), false)
-	
+
 	// Should fail with default limit
 	_, err := fs.RecvFrame(true)
 	if !errors.Is(err, ErrFrameTooLarge) {
@@ -465,11 +465,11 @@ func TestRecvFrame_ConfigurableLimits(t *testing.T) {
 	}()
 
 	fs2 := NewFstrm(bufio.NewReader(client2), bufio.NewWriter(client2), client2, 2*time.Second, []byte("ctype"), false)
-	
+
 	// Should fail with default control limit (4064)
 	_, err = fs2.RecvControl()
-	if !errors.Is(err, ErrControlFrameTooLarge) {
-		t.Errorf("expected ErrControlFrameTooLarge with default limit, got: %v", err)
+	if !errors.Is(err, ErrControlFrameTooLarge) && !errors.Is(err, ErrFrameTooLarge) {
+		t.Errorf("expected ErrControlFrameTooLarge or ErrFrameTooLarge with default limit, got: %v", err)
 	}
 
 	// 3. Increase limits and verify success
@@ -491,5 +491,40 @@ func TestRecvFrame_ConfigurableLimits(t *testing.T) {
 	_, err = fs3.RecvControl()
 	if err != nil {
 		t.Fatalf("unexpected error with increased limit: %v", err)
+	}
+}
+
+func TestResetReceiver_ConfigurableLimits(t *testing.T) {
+	// Build a valid but large CONTROL_STOP frame
+	largeCT := make([]byte, 5000)
+	for i := range largeCT {
+		largeCT[i] = 's'
+	}
+	ctrlLarge := &ControlFrame{
+		ctype:  CONTROL_STOP,
+		ctypes: [][]byte{largeCT},
+	}
+	if err := ctrlLarge.Encode(); err != nil {
+		t.Fatalf("failed to encode control frame: %v", err)
+	}
+
+	frame := &Frame{
+		data:    ctrlLarge.data,
+		control: true,
+	}
+
+	// 1. Test with default limit (should fail since 5000+ > 4064)
+	fsDefault := NewFstrm(nil, nil, nil, 0, []byte("ctype"), false)
+	err := fsDefault.ResetReceiver(frame)
+	if !errors.Is(err, ErrControlFrameTooLarge) {
+		t.Errorf("expected ErrControlFrameTooLarge with default limit, got: %v", err)
+	}
+
+	// 2. Test with increased limit (should succeed with io.EOF)
+	fsLarge := NewFstrm(nil, nil, nil, 0, []byte("ctype"), false)
+	fsLarge.SetControlFrameMaxLength(uint32(len(ctrlLarge.data) + 100))
+	err = fsLarge.ResetReceiver(frame)
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("expected io.EOF with increased limit, got: %v", err)
 	}
 }
