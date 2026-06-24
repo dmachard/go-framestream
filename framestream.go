@@ -27,6 +27,7 @@ type Fstrm struct {
 	handshake             bool
 	dataFrameMaxLength    uint32
 	controlFrameMaxLength uint32
+	header                [4]byte
 }
 
 func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, conn net.Conn, readtimeout time.Duration, ctype []byte, handshake bool) *Fstrm {
@@ -52,17 +53,14 @@ func (fs *Fstrm) SetControlFrameMaxLength(length uint32) {
 	fs.controlFrameMaxLength = length
 }
 
-func (fs Fstrm) SendFrame(frame *Frame) (err error) {
-
-	r := bytes.NewReader(frame.data)
-
-	if _, err = r.WriteTo(fs.writer); err == nil {
+func (fs *Fstrm) SendFrame(frame *Frame) (err error) {
+	if _, err = fs.writer.Write(frame.data); err == nil {
 		err = fs.writer.Flush()
 	}
 	return err
 }
 
-func (fs Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err error) {
+func (fs *Fstrm) SendCompressedFrame(codec compress.Codec, frame *Frame) (err error) {
 
 	compressBuf := new(bytes.Buffer)
 	compressor := codec.NewWriter(compressBuf)
@@ -99,11 +97,10 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	}
 
 	// read frame len (4 bytes)
-	var header [4]byte
-	if _, err := io.ReadFull(fs.reader, header[:]); err != nil {
+	if _, err := io.ReadFull(fs.reader, fs.header[:]); err != nil {
 		return nil, err
 	}
-	frameLen := binary.BigEndian.Uint32(header[:])
+	frameLen := binary.BigEndian.Uint32(fs.header[:])
 
 	// frame control ?
 	isControl := frameLen == 0
@@ -111,10 +108,10 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 
 	// it is a control frame, read the next 4 bytes to get control length
 	if isControl {
-		if _, err := io.ReadFull(fs.reader, header[:]); err != nil {
+		if _, err := io.ReadFull(fs.reader, fs.header[:]); err != nil {
 			return nil, err
 		}
-		frameLen = binary.BigEndian.Uint32(header[:])
+		frameLen = binary.BigEndian.Uint32(fs.header[:])
 		offset = 4
 	}
 
@@ -159,11 +156,11 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 	return frame, nil
 }
 
-func (fs Fstrm) RecvFrame(timeout bool) (*Frame, error) {
+func (fs *Fstrm) RecvFrame(timeout bool) (*Frame, error) {
 	return fs.readFrame(timeout)
 }
 
-func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame, error) {
+func (fs *Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame, error) {
 	frame, err := fs.readFrame(timeout)
 	if err != nil {
 		return nil, err
@@ -188,7 +185,7 @@ func (fs Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame,
 	return uncompressedFrame, nil
 }
 
-func (fs Fstrm) ProcessFrame(ch chan []byte) error {
+func (fs *Fstrm) ProcessFrame(ch chan []byte) error {
 	var err error
 	var frame *Frame
 	for {
@@ -206,7 +203,7 @@ func (fs Fstrm) ProcessFrame(ch chan []byte) error {
 	return err
 }
 
-func (fs Fstrm) RecvControl() (*ControlFrame, error) {
+func (fs *Fstrm) RecvControl() (*ControlFrame, error) {
 	// waiting incoming frame
 	frame, err := fs.RecvFrame(true)
 	if err != nil {
@@ -227,7 +224,7 @@ func (fs Fstrm) RecvControl() (*ControlFrame, error) {
 	return ctrl_frame, nil
 }
 
-func (fs Fstrm) SendControl(control *ControlFrame) (err error) {
+func (fs *Fstrm) SendControl(control *ControlFrame) (err error) {
 	if err := control.Encode(); err != nil {
 		return err
 	}
@@ -272,7 +269,7 @@ func (fs Fstrm) InitSender() error {
 	return nil
 }
 
-func (fs Fstrm) ResetSender() error {
+func (fs *Fstrm) ResetSender() error {
 	// send stop control frame
 	ctrl_stop := &ControlFrame{ctype: CONTROL_STOP}
 	if err := fs.SendControl(ctrl_stop); err != nil {
@@ -331,7 +328,7 @@ func (fs Fstrm) InitReceiver() error {
 	return nil
 }
 
-func (fs Fstrm) ResetReceiver(frame *Frame) error {
+func (fs *Fstrm) ResetReceiver(frame *Frame) error {
 	// decode stop control frame
 	ctrl := ControlFrame{data: frame.data, maxLength: fs.controlFrameMaxLength}
 	if err := ctrl.Decode(); err != nil {

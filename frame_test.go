@@ -57,6 +57,16 @@ func BenchmarkFrameWrite(b *testing.B) {
 	}
 }
 
+func BenchmarkFrameEncode(b *testing.B) {
+	payload := []byte("hello world")
+	for i := 0; i < b.N; i++ {
+		frame := &Frame{data: payload}
+		if err := frame.Encode(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestFrameDataIsIndependentCopy(t *testing.T) {
 	// Simulate a stream with two different frames
 	buf := new(bytes.Buffer)

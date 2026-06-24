@@ -1,7 +1,6 @@
 package framestream
 
 import (
-	"bytes"
 	"encoding/binary"
 )
 
@@ -62,12 +61,10 @@ func (frame *Frame) AppendData(payload []byte) error {
 }
 
 func (frame *Frame) Encode() error {
-	var buf bytes.Buffer
 	length := len(frame.data)
-	if err := binary.Write(&buf, binary.BigEndian, uint32(length)); err != nil {
-		return err
-	}
-
-	frame.data = append(buf.Bytes(), frame.data...)
+	newData := make([]byte, 4+length)
+	binary.BigEndian.PutUint32(newData[:4], uint32(length))
+	copy(newData[4:], frame.data)
+	frame.data = newData
 	return nil
 }
