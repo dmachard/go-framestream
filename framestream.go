@@ -12,7 +12,7 @@ import (
 	"github.com/segmentio/kafka-go/compress"
 )
 
-const DefaultDataFrameMaxLength = 65536
+const DefaultDataFrameMaxLength = 1048576
 
 var ErrFrameTooLarge = errors.New("frame too large error")
 var ErrReaderNotReady = errors.New("reader not ready")
