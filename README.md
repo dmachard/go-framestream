@@ -67,7 +67,7 @@ if err != nil {
 
 By default, the library enforces the following limits:
 - Control frames: 4064 bytes
-- Data frames: 65536 bytes
+- Data frames: 1048576 bytes
 
 You can increase these limits to support vendors sending larger frames (like Infoblox):
 
