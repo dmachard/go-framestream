@@ -1,4 +1,7 @@
-<img src="https://img.shields.io/badge/go%20version-min%201.18-green" alt="Go version"/>
+![Go version](https://img.shields.io/badge/go%20version-min%201.23-green)
+![Go tests](https://img.shields.io/badge/go%20tests-24-green)
+![Go bench](https://img.shields.io/badge/go%20microbench-11-green)
+![Go fuzzing](https://img.shields.io/badge/go%20fuzzing-1-green)
 
 # go-framestream
 
@@ -110,21 +113,28 @@ for {
 }
 ```
 
-> **Note:** In zero-copy mode, `frame.Data()` borrows memory from the reader's internal buffer, which will be overwritten by subsequent reads. If you need to keep data across iterations or pass it to goroutines/channels, make an independent copy with `copy()`.
+> **Note:** In zero-copy mode, `frame.Data()` borrows memory from the reader's internal buffer and is overwritten on the next read. If your application processes frames asynchronously (e.g. sending raw slices over channels or storing them in queues), simply use the **default mode** (`SetZeroCopy(false)`), which automatically allocates independent, safe slices.
 
 ### Benchmark: `go-framestream` vs `farsightsec/golang-framestream`
 
 Comparative benchmark decoding a stream of 50 data frames (512 bytes each):
 
-| Library | Mode | Speed | Memory | Allocations |
-| :--- | :--- | :--- | :--- | :--- |
-| **`go-framestream`** | **Zero-Copy (`SetZeroCopy(true)`)** | **961 ns/op** | **0 B/op** | **0 allocs/op** |
-| `farsightsec/golang-framestream` | `Reader.ReadFrame()` | 1 908 ns/op | 4 480 B/op | 59 allocs/op |
-| `go-framestream` | Standard (`RecvFrame()`) | 5 056 ns/op | 27 280 B/op | 104 allocs/op |
-| `farsightsec/golang-framestream` | `Decoder.Decode()` | 77 799 ns/op | 1 053 091 B/op | 61 allocs/op |
+| Metric | `go-framestream` | `farsightsec/golang-framestream` |
+| :--- | :--- | :--- |
+| **Zero-Copy / Fast Mode** | **`SetZeroCopy(true)`** | `Reader.ReadFrame()` |
+| ↳ Speed | **961 ns/op** | 1 908 ns/op |
+| ↳ Memory | **0 B/op** | 4 480 B/op |
+| ↳ Allocations | **0 allocs/op** | 59 allocs/op |
+| **Default Mode** | **`RecvFrame()`** | `Decoder.Decode()` |
+| ↳ Speed | **5 056 ns/op** | 77 799 ns/op |
+| ↳ Memory | **27 280 B/op** | 1 053 091 B/op |
+| ↳ Allocations | 104 allocs/op | 61 allocs/op |
 
-* `go-framestream` in Zero-Copy mode is **2x faster** than Farsight's `Reader` with **zero heap allocations**.
-* `go-framestream` is **80x faster** than Farsight's `Decoder` (which allocates a 1 MB buffer per decoder).
+* **In Zero-Copy mode (`SetZeroCopy(true)`):**
+  * **2x faster** than Farsight's low-level `Reader` with **zero heap allocations**.
+  * **80x faster** than Farsight's default `Decoder`.
+* **In Default mode (`RecvFrame()`):**
+  * **15x faster** and allocates **38x less memory** than Farsight's default `Decoder` (which allocates 1 MB per decoder).
 * In addition, `go-framestream` supports **compression** (gzip, zstd, lz4, snappy) and raw unhandshaked streams, neither of which are supported by `farsightsec`.
 
 ## Testing
