@@ -28,6 +28,9 @@ type Fstrm struct {
 	dataFrameMaxLength    uint32
 	controlFrameMaxLength uint32
 	header                [4]byte
+	viewBuf               []byte
+	viewFrame             Frame
+	zeroCopy              bool
 }
 
 func NewFstrm(reader *bufio.Reader, writer *bufio.Writer, conn net.Conn, readtimeout time.Duration, ctype []byte, handshake bool) *Fstrm {
@@ -51,6 +54,18 @@ func (fs *Fstrm) SetDataFrameMaxLength(length uint32) {
 
 func (fs *Fstrm) SetControlFrameMaxLength(length uint32) {
 	fs.controlFrameMaxLength = length
+}
+
+func (fs *Fstrm) InitViewBuffer(capacity int) {
+	fs.viewBuf = make([]byte, capacity)
+}
+
+func (fs *Fstrm) SetZeroCopy(enabled bool) {
+	fs.zeroCopy = enabled
+}
+
+func (fs *Fstrm) IsZeroCopy() bool {
+	return fs.zeroCopy
 }
 
 func (fs *Fstrm) SendFrame(frame *Frame) (err error) {
@@ -157,7 +172,89 @@ func (fs *Fstrm) readFrame(timeout bool) (*Frame, error) {
 }
 
 func (fs *Fstrm) RecvFrame(timeout bool) (*Frame, error) {
+	if fs.zeroCopy {
+		return fs.readFrameView(timeout)
+	}
 	return fs.readFrame(timeout)
+}
+
+func (fs *Fstrm) readFrameView(timeout bool) (*Frame, error) {
+	// Enable read timeout
+	if timeout && fs.readtimeout != 0 {
+		fs.conn.SetReadDeadline(time.Now().Add(fs.readtimeout))
+		defer fs.conn.SetDeadline(time.Time{})
+	}
+
+	if fs.reader == nil {
+		return nil, ErrReaderNotReady
+	}
+
+	// read frame len (4 bytes)
+	if _, err := io.ReadFull(fs.reader, fs.header[:]); err != nil {
+		return nil, err
+	}
+	frameLen := binary.BigEndian.Uint32(fs.header[:])
+
+	// frame control ?
+	isControl := frameLen == 0
+	offset := 0
+
+	// it is a control frame, read the next 4 bytes to get control length
+	if isControl {
+		if _, err := io.ReadFull(fs.reader, fs.header[:]); err != nil {
+			return nil, err
+		}
+		frameLen = binary.BigEndian.Uint32(fs.header[:])
+		offset = 4
+	}
+
+	// total frame size needed
+	total := offset + int(frameLen)
+
+	// bounds check
+	var maxLength uint32
+	if isControl {
+		maxLength = fs.controlFrameMaxLength
+		if maxLength == 0 {
+			maxLength = DefaultControlFrameMaxLength
+		}
+	} else {
+		maxLength = fs.dataFrameMaxLength
+		if maxLength == 0 {
+			maxLength = DefaultDataFrameMaxLength
+		}
+	}
+	if total > int(maxLength) {
+		return nil, ErrFrameTooLarge
+	}
+
+	// reuse buffer without allocating on the heap
+	if cap(fs.viewBuf) < total {
+		fs.viewBuf = make([]byte, total)
+	}
+	data := fs.viewBuf[:total]
+
+	// If control frame, manually write length prefix in first 4 bytes
+	if isControl {
+		binary.BigEndian.PutUint32(data[:4], frameLen)
+	}
+
+	// read payload directly into data buffer
+	if _, err := io.ReadFull(fs.reader, data[offset:total]); err != nil {
+		return nil, err
+	}
+
+	fs.viewFrame.data = data
+	fs.viewFrame.control = isControl
+	return &fs.viewFrame, nil
+}
+
+// RecvFrameView reads the next frame without heap allocations by reusing an internal buffer.
+// Note: The memory returned by frame.Data() is a temporary view and will be overwritten
+// by subsequent calls to RecvFrameView. If the data needs to be retained or processed concurrently
+// (e.g. across goroutines or channels), make an independent copy or use RecvFrame().
+func (fs *Fstrm) RecvFrameView(timeout bool) (*Frame, error) {
+	return fs.readFrameView(timeout)
 }
 
 func (fs *Fstrm) RecvCompressedFrame(codec compress.Codec, timeout bool) (*Frame, error) {
@@ -189,7 +286,7 @@ func (fs *Fstrm) ProcessFrame(ch chan []byte) error {
 	var err error
 	var frame *Frame
 	for {
-		frame, err = fs.RecvFrame(false)
+		frame, err = fs.readFrame(false)
 		if err != nil {
 			break
 		}

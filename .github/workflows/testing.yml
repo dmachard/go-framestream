@@ -31,5 +31,8 @@ jobs:
     - name: Bench
       run: go test -bench . -benchmem
 
+    - name: Comparison Benchmark (vs farsightsec)
+      run: go test -run=^$ -bench=BenchmarkComparison -benchmem
+
     - name: Bench with race detection
       run: go test -race -bench . -benchmem

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go/compress"
+
+	farsight "github.com/farsightsec/golang-framestream"
 )
 
 func TestFramestream_Handshake(t *testing.T) {
@@ -526,5 +528,531 @@ func TestResetReceiver_ConfigurableLimits(t *testing.T) {
 	err = fsLarge.ResetReceiver(frame)
 	if !errors.Is(err, io.EOF) {
 		t.Errorf("expected io.EOF with increased limit, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests and Benchmarks for Zero-Copy / Reusable Buffer Reader (RecvFrameView)
+// ---------------------------------------------------------------------------
+
+func TestRecvFrameView_ReusesBuffer(t *testing.T) {
+	buf := new(bytes.Buffer)
+	// Frame 1: length 4, data 0x01 0x02 0x03 0x04
+	buf.Write([]byte{0, 0, 0, 4, 1, 2, 3, 4})
+	// Frame 2: length 4, data 0xAA 0xBB 0xCC 0xDD
+	buf.Write([]byte{0, 0, 0, 4, 0xAA, 0xBB, 0xCC, 0xDD})
+
+	fs := &Fstrm{
+		reader: bufio.NewReader(buf),
+	}
+
+	f1, err := fs.RecvFrameView(false)
+	if err != nil {
+		t.Fatalf("Error reading frame 1: %v", err)
+	}
+	ptr1 := &f1.data[0]
+
+	f2, err := fs.RecvFrameView(false)
+	if err != nil {
+		t.Fatalf("Error reading frame 2: %v", err)
+	}
+	ptr2 := &f2.data[0]
+
+	// Must point to the exact same underlying memory address
+	if ptr1 != ptr2 {
+		t.Errorf("expected underlying buffer to be reused (same address), got %p vs %p", ptr1, ptr2)
+	}
+}
+
+func TestRecvFrameView_ControlFrame(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		defer server.Close()
+
+		controlData := []byte{9, 9, 9, 9}
+		var buf bytes.Buffer
+
+		// Write first 4 bytes = 0 to indicate control frame
+		binary.Write(&buf, binary.BigEndian, uint32(0))
+		// Then write 4 bytes for length of control payload
+		binary.Write(&buf, binary.BigEndian, uint32(len(controlData)))
+		// Write the actual control frame data
+		buf.Write(controlData)
+
+		server.Write(buf.Bytes())
+	}()
+
+	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 2*time.Second, []byte("ctype"), false)
+
+	frame, err := fs.RecvFrameView(true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !frame.IsControl() {
+		t.Fatalf("expected control frame, got data frame")
+	}
+	if !bytes.Equal(frame.Data(), []byte{0, 0, 0, 4, 9, 9, 9, 9}) {
+		t.Fatalf("unexpected control data: got %v", frame.Data())
+	}
+}
+
+func TestRecvFrameView_ReaderNotReady(t *testing.T) {
+	fs := NewFstrm(nil, nil, nil, 0, []byte("ctype"), false)
+
+	_, err := fs.RecvFrameView(false)
+	if !errors.Is(err, ErrReaderNotReady) {
+		t.Fatalf("expected ErrReaderNotReady, got: %v", err)
+	}
+}
+
+func TestRecvFrameView_FrameTooLarge(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	go func() {
+		defer server.Close()
+		binary.Write(server, binary.BigEndian, uint32(DefaultDataFrameMaxLength+1))
+	}()
+
+	fs := NewFstrm(bufio.NewReader(client), bufio.NewWriter(client), client, 1*time.Second, []byte("ctype"), false)
+
+	_, err := fs.RecvFrameView(true)
+	if !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("expected ErrFrameTooLarge, got: %v", err)
+	}
+}
+
+func BenchmarkRecvFrameView_RawDataFrame(b *testing.B) {
+	// Raw data identical to BenchmarkRecvFrame_RawDataFrame
+	hexInput := `
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130d5d6022a04ac140002383540f8f2acc0064dca57fc1b5234cf8b01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a00080de5212a2cb396fd1a00000000e90a0a646e73646973745f76321214646e736469737420322
+e302e302d616c70686131780172b9010806180110012204ac14000130d5d6022a04ac140002383540f8f2acc0064dca57fc1b60f8f2
+acc0066d70c0c11c728801cf8b81800001000600000001076578616d706c6503636f6d0000010001c00c00010001000000c8000417d
+7008ac00c00010001000000c8000417c0e450c00c00010001000000c80004600780c6c00c00010001000000c8000417d70088c00c00
+010001000000c8000417c0e454c00c00010001000000c80004600780af00002904d00000000000001a0764656661756c74
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130b1ce022a04ac140002383540fdf2acc0064da7199b1e52347ac201200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a0008fff006c7c33a7e921a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130b1ce022a04ac140002383540fdf2acc0064da7
+199b1e60fdf2acc0066d46399c1e7288017ac281800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000c3000417d7008ac00c00010001000000c3000417c0e450c00c00010001000000c30004600780c6c00c00010001000000c3000417
+d70088c00c00010001000000c3000417c0e454c00c00010001000000c30004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130cef5022a04ac140002383540fef2acc0064daa4338395234eb3a01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a000867080e39afb09ce01a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130cef5022a04ac140002383540fef2acc0064daa
+43383960fef2acc0066dba203939728801eb3a81800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000c2000417d7008ac00c00010001000000c2000417c0e450c00c00010001000000c20004600780c6c00c00010001000000c2000417
+d70088c00c00010001000000c2000417c0e454c00c00010001000000c20004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130bade022a04ac14000238354084f3acc0064dd373ab325234eb0701200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a0008b2aba6eec88f49511a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130bade022a04ac14000238354084f3acc0064dd3
+73ab326084f3acc0066df799ac32728801eb0781800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000bc000417d7008ac00c00010001000000bc000417c0e450c00c00010001000000bc0004600780c6c00c00010001000000bc000417
+d70088c00c00010001000000bc000417c0e454c00c00010001000000bc0004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+13094c3022a04ac14000238354085f3acc0064d3d9ac814523401c201200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a000856732de27bf036721a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac1400013094c3022a04ac14000238354085f3acc0064d3d
+9ac8146085f3acc0066d66bcc91472880101c281800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000bb000417d7008ac00c00010001000000bb000417c0e450c00c00010001000000bb0004600780c6c00c00010001000000bb000417
+d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130e49f032a04ac14000238354085f3acc0064d5b5bae24523496ce01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a00088b357689c486c94e1a00000000ee0a10646e73646973745f76325f63616368651214646e7364
+69737420322e302e302d616c70686131780172b9010806180110012204ac14000130e49f032a04ac14000238354085f3acc0064d5b5b
+ae246085f3acc0066d9d6caf2472880196ce81800001000600000001076578616d706c6503636f6d0000010001c00c0001000100000
+0bb000417d7008ac00c00010001000000bb000417c0e450c00c00010001000000bb0004600780c6c00c00010001000000bb000417d70
+088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130b09c022a04ac14000238354085f3acc0064dc2ded23152345b9a01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a00081bc9d01d9a8935c21a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130b09c022a04ac14000238354085f3acc0064dc2
+ded2316085f3acc0066d79ffd3317288015b9a81800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000bb000417d7008ac00c00010001000000bb000417c0e450c00c00010001000000bb0004600780c6c00c00010001000000bb000417
+d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d00000000000001a06636163686564
+`
+	hexInput = strings.ReplaceAll(hexInput, "\n", "")
+	data, err := hex.DecodeString(hexInput)
+	if err != nil {
+		b.Fatalf("invalid hex input: %v", err)
+	}
+
+	reader := newResettableReader(data)
+	fs := NewFstrm(
+		reader.buf,
+		nil, nil, 0, []byte("ctype"), false,
+	)
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		reader.Reset(data)
+
+		var frameCount int
+		for {
+			frame, err := fs.RecvFrameView(true)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatalf("error reading frame %d: %v", frameCount+1, err)
+			}
+			if frame.IsControl() {
+				b.Fatalf("unexpected control frame at index %d", frameCount+1)
+			}
+			frameCount++
+		}
+
+		const expected = 14
+		if frameCount != expected {
+			b.Fatalf("expected %d frames, got %d", expected, frameCount)
+		}
+	}
+}
+
+func TestRecvFrame_SetZeroCopy(t *testing.T) {
+	buf := new(bytes.Buffer)
+	// Frame 1: length 4, data 0x01 0x02 0x03 0x04
+	buf.Write([]byte{0, 0, 0, 4, 1, 2, 3, 4})
+	// Frame 2: length 4, data 0xAA 0xBB 0xCC 0xDD
+	buf.Write([]byte{0, 0, 0, 4, 0xAA, 0xBB, 0xCC, 0xDD})
+
+	fs := &Fstrm{
+		reader: bufio.NewReader(buf),
+	}
+
+	if fs.IsZeroCopy() {
+		t.Error("expected zeroCopy to be false by default")
+	}
+
+	fs.SetZeroCopy(true)
+	if !fs.IsZeroCopy() {
+		t.Error("expected zeroCopy to be true after SetZeroCopy(true)")
+	}
+
+	// Calling regular fs.RecvFrame should now reuse the buffer
+	f1, err := fs.RecvFrame(false)
+	if err != nil {
+		t.Fatalf("Error reading frame 1: %v", err)
+	}
+	ptr1 := &f1.data[0]
+
+	f2, err := fs.RecvFrame(false)
+	if err != nil {
+		t.Fatalf("Error reading frame 2: %v", err)
+	}
+	ptr2 := &f2.data[0]
+
+	if ptr1 != ptr2 {
+		t.Errorf("expected underlying buffer to be reused when SetZeroCopy(true), got %p vs %p", ptr1, ptr2)
+	}
+}
+
+func BenchmarkRecvFrame_ZeroCopyFlag(b *testing.B) {
+	hexInput := `
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130d5d6022a04ac140002383540f8f2acc0064dca57fc1b5234cf8b01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a00080de5212a2cb396fd1a00000000e90a0a646e73646973745f76321214646e736469737420322
+e302e302d616c70686131780172b9010806180110012204ac14000130d5d6022a04ac140002383540f8f2acc0064dca57fc1b60f8f2
+acc0066d70c0c11c728801cf8b81800001000600000001076578616d706c6503636f6d0000010001c00c00010001000000c8000417d
+7008ac00c00010001000000c8000417c0e450c00c00010001000000c80004600780c6c00c00010001000000c8000417d70088c00c00
+010001000000c8000417c0e454c00c00010001000000c80004600780af00002904d00000000000001a0764656661756c74
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130b1ce022a04ac140002383540fdf2acc0064da7199b1e52347ac201200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a0008fff006c7c33a7e921a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130b1ce022a04ac140002383540fdf2acc0064da7
+199b1e60fdf2acc0066d46399c1e7288017ac281800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000c3000417d7008ac00c00010001000000c3000417c0e450c00c00010001000000c30004600780c6c00c00010001000000c3000417
+d70088c00c00010001000000c3000417c0e454c00c00010001000000c30004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130cef5022a04ac140002383540fef2acc0064daa4338395234eb3a01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a000867080e39afb09ce01a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130cef5022a04ac140002383540fef2acc0064daa
+43383960fef2acc0066dba203939728801eb3a81800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000c2000417d7008ac00c00010001000000c2000417c0e450c00c00010001000000c20004600780c6c00c00010001000000c2000417
+d70088c00c00010001000000c2000417c0e454c00c00010001000000c20004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130bade022a04ac14000238354084f3acc0064dd373ab325234eb0701200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a0008b2aba6eec88f49511a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130bade022a04ac14000238354084f3acc0064dd3
+73ab326084f3acc0066df799ac32728801eb0781800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000bc000417d7008ac00c00010001000000bc000417c0e450c00c00010001000000bc0004600780c6c00c00010001000000bc000417
+d70088c00c00010001000000bc000417c0e454c00c00010001000000bc0004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+13094c3022a04ac14000238354085f3acc0064d3d9ac814523401c201200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a000856732de27bf036721a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac1400013094c3022a04ac14000238354085f3acc0064d3d
+9ac8146085f3acc0066d66bcc91472880101c281800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000bb000417d7008ac00c00010001000000bb000417c0e450c00c00010001000000bb0004600780c6c00c00010001000000bb000417
+d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130e49f032a04ac14000238354085f3acc0064d5b5bae24523496ce01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a00088b357689c486c94e1a00000000ee0a10646e73646973745f76325f63616368651214646e7364
+69737420322e302e302d616c70686131780172b9010806180110012204ac14000130e49f032a04ac14000238354085f3acc0064d5b5b
+ae246085f3acc0066d9d6caf2472880196ce81800001000600000001076578616d706c6503636f6d0000010001c00c0001000100000
+0bb000417d7008ac00c00010001000000bb000417c0e450c00c00010001000000bb0004600780c6c00c00010001000000bb000417d70
+088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d00000000000001a06636163686564
+000000810a0a646e73646973745f76321214646e736469737420322e302e302d616c70686131780172590805180110012204ac14000
+130b09c022a04ac14000238354085f3acc0064dc2ded23152345b9a01200001000000000001076578616d706c6503636f6d00000100
+0100002904d000000000000c000a00081bc9d01d9a8935c21a00000000ee0a10646e73646973745f76325f63616368651214646e736
+469737420322e302e302d616c70686131780172b9010806180110012204ac14000130b09c022a04ac14000238354085f3acc0064dc2
+ded2316085f3acc0066d79ffd3317288015b9a81800001000600000001076578616d706c6503636f6d0000010001c00c00010001000
+000bb000417d7008ac00c00010001000000bb000417c0e450c00c00010001000000bb0004600780c6c00c00010001000000bb000417
+d70088c00c00010001000000bb000417c0e454c00c00010001000000bb0004600780af00002904d00000000000001a06636163686564
+`
+	hexInput = strings.ReplaceAll(hexInput, "\n", "")
+	data, err := hex.DecodeString(hexInput)
+	if err != nil {
+		b.Fatalf("invalid hex input: %v", err)
+	}
+
+	reader := newResettableReader(data)
+	fs := NewFstrm(
+		reader.buf,
+		nil, nil, 0, []byte("ctype"), false,
+	)
+	fs.SetZeroCopy(true)
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		reader.Reset(data)
+
+		var frameCount int
+		for {
+			// Calling RecvFrame directly!
+			frame, err := fs.RecvFrame(true)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatalf("error reading frame %d: %v", frameCount+1, err)
+			}
+			if frame.IsControl() {
+				b.Fatalf("unexpected control frame at index %d", frameCount+1)
+			}
+			frameCount++
+		}
+
+		const expected = 14
+		if frameCount != expected {
+			b.Fatalf("expected %d frames, got %d", expected, frameCount)
+		}
+	}
+}
+
+func TestFarsightComparison(t *testing.T) {
+	buf := new(bytes.Buffer)
+	enc, err := farsight.NewEncoder(buf, nil)
+	if err != nil {
+		t.Fatalf("farsight NewEncoder failed: %v", err)
+	}
+
+	for i := 0; i < 10; i++ {
+		b := bytes.Repeat([]byte("X"), 100)
+		if _, err := enc.Write(b); err != nil {
+			t.Fatalf("enc.Write err: %v", err)
+		}
+	}
+	if err := enc.Close(); err != nil {
+		t.Fatalf("enc.Close err: %v", err)
+	}
+
+	streamBytes := buf.Bytes()
+
+	// 1. Read with farsight Decoder
+	dec, err := farsight.NewDecoder(bytes.NewReader(streamBytes), nil)
+	if err != nil {
+		t.Fatalf("farsight NewDecoder err: %v", err)
+	}
+	var farsightCount int
+	for {
+		frame, err := dec.Decode()
+		if err == io.EOF || err == farsight.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("farsight Decode err: %v", err)
+		}
+		if len(frame) != 100 {
+			t.Fatalf("farsight frame length mismatch")
+		}
+		farsightCount++
+	}
+	if farsightCount != 10 {
+		t.Fatalf("expected 10 frames from farsight, got %d", farsightCount)
+	}
+
+	// 2. Read with go-framestream in ZeroCopy mode
+	fs := NewFstrm(bufio.NewReader(bytes.NewReader(streamBytes)), nil, nil, 0, nil, false)
+	fs.SetZeroCopy(true)
+
+	// First frame is CONTROL_START
+	startFrame, err := fs.RecvFrame(false)
+	if err != nil {
+		t.Fatalf("go-framestream recv start err: %v", err)
+	}
+	if !startFrame.IsControl() {
+		t.Fatalf("expected control frame for START")
+	}
+
+	var goCount int
+	for {
+		frame, err := fs.RecvFrame(false)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("go-framestream recv err: %v", err)
+		}
+		if frame.IsControl() {
+			// STOP control frame
+			if err := fs.ResetReceiver(frame); err != nil && err != io.EOF {
+				t.Fatalf("ResetReceiver err: %v", err)
+			}
+			break
+		}
+		if len(frame.Data()) != 100 {
+			t.Fatalf("go-framestream frame length mismatch")
+		}
+		goCount++
+	}
+	if goCount != 10 {
+		t.Fatalf("expected 10 frames from go-framestream, got %d", goCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Benchmarks Comparing github.com/dmachard/go-framestream vs
+// github.com/farsightsec/golang-framestream
+// ---------------------------------------------------------------------------
+
+func makeFarsightStream(numFrames int, frameSize int) []byte {
+	buf := new(bytes.Buffer)
+	enc, err := farsight.NewEncoder(buf, nil)
+	if err != nil {
+		panic(err)
+	}
+	payload := bytes.Repeat([]byte("A"), frameSize)
+	for i := 0; i < numFrames; i++ {
+		if _, err := enc.Write(payload); err != nil {
+			panic(err)
+		}
+	}
+	if err := enc.Close(); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+func BenchmarkComparison_Farsight_Decode(b *testing.B) {
+	stream := makeFarsightStream(50, 512)
+	r := bytes.NewReader(stream)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Reset(stream)
+		dec, err := farsight.NewDecoder(r, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for {
+			_, err := dec.Decode()
+			if err == io.EOF || err == farsight.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkComparison_Farsight_ReadFrame(b *testing.B) {
+	stream := makeFarsightStream(50, 512)
+	r := bytes.NewReader(stream)
+	buf := make([]byte, 4096)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.Reset(stream)
+		reader, err := farsight.NewReader(r, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for {
+			_, err := reader.ReadFrame(buf)
+			if err == io.EOF || err == farsight.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+func BenchmarkComparison_GoFramestream_RecvFrame(b *testing.B) {
+	stream := makeFarsightStream(50, 512)
+	reader := newResettableReader(stream)
+	fs := NewFstrm(reader.buf, nil, nil, 0, nil, false)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		reader.Reset(stream)
+		// skip START control frame
+		_, err := fs.RecvFrame(false)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for {
+			frame, err := fs.RecvFrame(false)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			if frame.IsControl() {
+				break
+			}
+		}
+	}
+}
+
+func BenchmarkComparison_GoFramestream_RecvFrame_ZeroCopy(b *testing.B) {
+	stream := makeFarsightStream(50, 512)
+	reader := newResettableReader(stream)
+	fs := NewFstrm(reader.buf, nil, nil, 0, nil, false)
+	fs.SetZeroCopy(true)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		reader.Reset(stream)
+		// skip START control frame
+		_, err := fs.RecvFrame(false)
+		if err != nil {
+			b.Fatal(err)
+		}
+		for {
+			frame, err := fs.RecvFrame(false)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+			if frame.IsControl() {
+				break
+			}
+		}
 	}
 }
