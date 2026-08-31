@@ -953,7 +953,7 @@ func makeFarsightStream(numFrames int, frameSize int) []byte {
 	return buf.Bytes()
 }
 
-func BenchmarkComparison_Farsight_Decoder(b *testing.B) {
+func BenchmarkComparison_Farsight_Decode(b *testing.B) {
 	stream := makeFarsightStream(50, 512)
 	r := bytes.NewReader(stream)
 
@@ -976,7 +976,7 @@ func BenchmarkComparison_Farsight_Decoder(b *testing.B) {
 	}
 }
 
-func BenchmarkComparison_Farsight_Reader(b *testing.B) {
+func BenchmarkComparison_Farsight_ReadFrame(b *testing.B) {
 	stream := makeFarsightStream(50, 512)
 	r := bytes.NewReader(stream)
 	buf := make([]byte, 4096)
@@ -1000,7 +1000,7 @@ func BenchmarkComparison_Farsight_Reader(b *testing.B) {
 	}
 }
 
-func BenchmarkComparison_GoFramestream_Standard(b *testing.B) {
+func BenchmarkComparison_GoFramestream_RecvFrame(b *testing.B) {
 	stream := makeFarsightStream(50, 512)
 	reader := newResettableReader(stream)
 	fs := NewFstrm(reader.buf, nil, nil, 0, nil, false)
@@ -1028,7 +1028,7 @@ func BenchmarkComparison_GoFramestream_Standard(b *testing.B) {
 	}
 }
 
-func BenchmarkComparison_GoFramestream_ZeroCopy(b *testing.B) {
+func BenchmarkComparison_GoFramestream_RecvFrame_ZeroCopy(b *testing.B) {
 	stream := makeFarsightStream(50, 512)
 	reader := newResettableReader(stream)
 	fs := NewFstrm(reader.buf, nil, nil, 0, nil, false)

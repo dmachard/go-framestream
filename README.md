@@ -130,11 +130,11 @@ Comparative benchmark decoding a stream of 50 data frames (512 bytes each):
 | ↳ Memory | **27 280 B/op** | 1 053 091 B/op |
 | ↳ Allocations | 104 allocs/op | 61 allocs/op |
 
-* **In Zero-Copy mode (`SetZeroCopy(true)`):**
-  * **2x faster** than Farsight's low-level `Reader` with **zero heap allocations**.
-  * **80x faster** than Farsight's default `Decoder`.
+* **In Zero-Copy mode (`RecvFrame` with `SetZeroCopy(true)`):**
+  * **2x faster** than Farsight's `ReadFrame()` with **zero heap allocations**.
+  * **80x faster** than Farsight's `Decode()`.
 * **In Default mode (`RecvFrame()`):**
-  * **15x faster** and allocates **38x less memory** than Farsight's default `Decoder` (which allocates 1 MB per decoder).
+  * **15x faster** and allocates **38x less memory** than Farsight's `Decode()` (which allocates 1 MB per decoder).
 * In addition, `go-framestream` supports **compression** (gzip, zstd, lz4, snappy) and raw unhandshaked streams, neither of which are supported by `farsightsec`.
 
 ## Testing
