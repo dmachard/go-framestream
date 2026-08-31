@@ -2,7 +2,9 @@
 
 # go-framestream
 
-Frame Streams implementation in Go with channed-base support and **compression** (gzip, lz4, snappy and zstd).
+Frame Streams implementation in Go with channel-based support, **compression** (gzip, lz4, snappy and zstd), and **high-performance zero-copy reading**.
+
+A fast alternative to [farsightsec/golang-framestream](https://github.com/farsightsec/golang-framestream).
 
 ## Installation
 
@@ -81,6 +83,50 @@ fs.SetControlFrameMaxLength(16384)
 fs.SetDataFrameMaxLength(1048576)
 ```
 
+## High-Performance Zero-Copy Reader
+
+For high-throughput environments (e.g. DNSTAP processing tens of thousands of frames per second), the library provides zero-copy reading modes that eliminate heap allocations on the critical receive path.
+
+### Enabling Zero-Copy on `RecvFrame`
+
+You can enable zero-copy on an existing `Fstrm` instance without changing any of your `RecvFrame` call sites:
+
+```go
+fs := NewFstrm(...)
+
+// Enable zero-copy mode: RecvFrame will reuse an internal buffer (0 allocs/op)
+fs.SetZeroCopy(true)
+
+// Optional: pre-allocate internal buffer to avoid dynamic growth allocations
+fs.InitViewBuffer(64 * 1024) // 64 KB
+
+for {
+    frame, err := fs.RecvFrame(false)
+    if err != nil {
+        break
+    }
+    // Process frame.Data() synchronously before the next read
+    process(frame.Data())
+}
+```
+
+> **Note:** In zero-copy mode, `frame.Data()` borrows memory from the reader's internal buffer, which will be overwritten by subsequent reads. If you need to keep data across iterations or pass it to goroutines/channels, make an independent copy with `copy()`.
+
+### Benchmark: `go-framestream` vs `farsightsec/golang-framestream`
+
+Comparative benchmark decoding a stream of 50 data frames (512 bytes each):
+
+| Library | Mode | Speed | Memory | Allocations |
+| :--- | :--- | :--- | :--- | :--- |
+| **`go-framestream`** | **Zero-Copy (`SetZeroCopy(true)`)** | **961 ns/op** | **0 B/op** | **0 allocs/op** |
+| `farsightsec/golang-framestream` | `Reader.ReadFrame()` | 1 908 ns/op | 4 480 B/op | 59 allocs/op |
+| `go-framestream` | Standard (`RecvFrame()`) | 5 056 ns/op | 27 280 B/op | 104 allocs/op |
+| `farsightsec/golang-framestream` | `Decoder.Decode()` | 77 799 ns/op | 1 053 091 B/op | 61 allocs/op |
+
+* `go-framestream` in Zero-Copy mode is **2x faster** than Farsight's `Reader` with **zero heap allocations**.
+* `go-framestream` is **80x faster** than Farsight's `Decoder` (which allocates a 1 MB buffer per decoder).
+* In addition, `go-framestream` supports **compression** (gzip, zstd, lz4, snappy) and raw unhandshaked streams, neither of which are supported by `farsightsec`.
+
 ## Testing
 
 ```bash
@@ -107,13 +153,15 @@ $ go test -bench=. -benchmem
 goos: linux
 goarch: amd64
 pkg: github.com/dmachard/go-framestream
-cpu: Intel(R) Core(TM) Ultra 9 185H
-BenchmarkControlDecode-22               40167390                25.56 ns/op           24 B/op       1 allocs/op
-BenchmarkControlEncode-22               44397898                25.58 ns/op          48 B/op          1 allocs/op
-BenchmarkFrameWrite-22                  22031930                46.46 ns/op          96 B/op          2 allocs/op
-BenchmarkRecvFrame_RawDataFrame-22        897949              1303 ns/op           3196 B/op         43 allocs/op
+cpu: AMD Ryzen 9 9900X 12-Core Processor            
+BenchmarkControlDecode-24               61187217        19.02 ns/op          24 B/op        1 allocs/op
+BenchmarkControlEncode-24               77231541        14.68 ns/op          48 B/op        1 allocs/op
+BenchmarkFrameWrite-24                  39990684        29.20 ns/op          96 B/op        2 allocs/op
+BenchmarkFrameEncode-24                135106399         8.65 ns/op          16 B/op        1 allocs/op
+BenchmarkRecvFrame_RawDataFrame-24       1580408       765.4 ns/op         3136 B/op       28 allocs/op
+BenchmarkRecvFrame_ZeroCopyFlag-24       5590976       218.8 ns/op            0 B/op        0 allocs/op
 PASS
-ok      github.com/dmachard/go-framestream      5.482s
+ok      github.com/dmachard/go-framestream
 ```
 
 ### Frame format
